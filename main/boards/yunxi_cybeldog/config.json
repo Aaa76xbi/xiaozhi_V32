@@ -1,0 +1,12 @@
+{
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "test_board-jkst_cybeldog",
+            "sdkconfig_append": [
+                        "CONFIG_LCD_GC9A01_240X240=y",
+                        "LCD_GC9A01_240X240=y"
+            ]
+        }
+    ]
+}

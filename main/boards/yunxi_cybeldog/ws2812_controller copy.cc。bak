@@ -1,0 +1,313 @@
+// #include <esp_log.h>
+// #include "iot/thing.h"
+// #include "driver/gpio.h"
+// #include "led_strip.h"
+// #include "esp_adc/adc_oneshot.h"
+// #include "freertos/FreeRTOS.h"
+// #include "freertos/task.h"
+// #include "config.h"
+
+// #define TAG "Ws2812Controller"
+// // #define WS2812_GPIO      2
+// // #define WS2812_LED_NUM   64   // 8x8灯板，实际只用前8颗，用
+
+// namespace iot
+// {
+//     enum Ws2812EffectType {
+//         EFFECT_OFF = 0,
+//         EFFECT_BREATH = 1,
+//         EFFECT_VOLUME = 2
+//     };
+
+//     class Ws2812Controller : public Thing
+//     {
+//     private:
+//         led_strip_handle_t led_strip_ = nullptr;
+//         TaskHandle_t effect_task_handle_ = nullptr;
+//         volatile Ws2812EffectType effect_type_ = EFFECT_OFF;
+//         volatile bool running_ = false;
+//         adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+
+//         static void EffectTask(void *arg) {
+//             Ws2812Controller *self = static_cast<Ws2812Controller *>(arg);
+//             int dir = 1, brightness = 0;
+//             bool adc_inited = false;
+//             while (self->running_) {
+//                 if (self->effect_type_ == EFFECT_BREATH) {
+//                     // 呼吸灯：只点亮前8颗
+//                     for (int i = 0; i < 8; i++) {
+//                         led_strip_set_pixel(self->led_strip_, i, 0, 0, brightness);
+//                     }
+//                     for (int i = 8; i < WS2812_LED_NUM; i++) {
+//                         led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+//                     }
+//                     led_strip_refresh(self->led_strip_);
+//                     brightness += dir * 5;
+//                     if (brightness >= 80) { brightness = 80; dir = -1; }
+//                     if (brightness <= 0)  { brightness = 0; dir = 1; }
+//                     vTaskDelay(pdMS_TO_TICKS(20));
+//                 } else if (self->effect_type_ == EFFECT_VOLUME) {
+//                     // 音量律动（新ADC驱动，假设用ADC1通道0）
+//                     if (!adc_inited) {
+//                         adc_oneshot_unit_init_cfg_t init_config = {
+//                             .unit_id = ADC_UNIT_1,
+//                         };
+//                         adc_oneshot_new_unit(&init_config, &self->adc_handle_);
+//                         adc_oneshot_chan_cfg_t config = {
+//                             .atten = ADC_ATTEN_DB_12,
+//                             .bitwidth = ADC_BITWIDTH_DEFAULT,
+//                         };
+//                         adc_oneshot_config_channel(self->adc_handle_, ADC_CHANNEL_0, &config);
+//                         adc_inited = true;
+//                     }
+//                     int adc = 0;
+//                     adc_oneshot_read(self->adc_handle_, ADC_CHANNEL_0, &adc);
+//                     int volume = abs(adc - 2048); // 去直流分量
+//                     int level = volume / 256;     // 0~8
+//                     if (level > 8) level = 8;
+//                     for (int i = 0; i < 8; i++) {
+//                         if (i < level)
+//                             led_strip_set_pixel(self->led_strip_, i, 0, 255, 0); // 绿色
+//                         else
+//                             led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);   // 熄灭
+//                     }
+//                     for (int i = 8; i < WS2812_LED_NUM; i++) {
+//                         led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+//                     }
+//                     led_strip_refresh(self->led_strip_);
+//                     vTaskDelay(pdMS_TO_TICKS(30));
+//                 } else {
+//                     // 关灯
+//                     for (int i = 0; i < WS2812_LED_NUM; i++) {
+//                         led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+//                     }
+//                     led_strip_refresh(self->led_strip_);
+//                     vTaskDelay(pdMS_TO_TICKS(100));
+//                 }
+//             }
+//             // 退出时关灯
+//             for (int i = 0; i < WS2812_LED_NUM; i++) {
+//                 led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+//             }
+//             led_strip_refresh(self->led_strip_);
+//             vTaskDelete(NULL);
+//         }
+
+//         void StartEffectTask() {
+//             if (!running_) {
+//                 running_ = true;
+//                 xTaskCreate(EffectTask, "ws2812_effect", 2048, this, 5, &effect_task_handle_);
+//             }
+//         }
+
+//         void StopEffectTask() {
+//             running_ = false;
+//             effect_type_ = EFFECT_OFF;
+//             effect_task_handle_ = nullptr;
+//             // 关灯
+//             for (int i = 0; i < WS2812_LED_NUM; i++) {
+//                 led_strip_set_pixel(led_strip_, i, 0, 0, 0);
+//             }
+//             led_strip_refresh(led_strip_);
+//         }
+
+//     public:
+//         Ws2812Controller() : Thing("Ws2812Controller", "WS2812灯带控制器")
+//         {
+//             led_strip_config_t strip_config = {
+//                 WS2812_GPIO,
+//                 WS2812_LED_NUM,
+//                 LED_PIXEL_FORMAT_GRB,
+//                 LED_MODEL_WS2812,
+//                 { false }
+//             };
+//             led_strip_rmt_config_t rmt_config = {
+//                 RMT_CLK_SRC_DEFAULT,
+//                 10 * 1000 * 1000,
+//                 0,
+//                 { false }
+//             };
+//             led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_);
+//             led_strip_clear(led_strip_);
+
+//             // IoT方法：呼吸灯
+//             methods_.AddMethod("breath", "呼吸灯效果", ParameterList(), [this](const ParameterList &) {
+//                 effect_type_ = EFFECT_BREATH;
+//                 StartEffectTask();
+//             });
+
+//             // IoT方法：音量律动
+//             methods_.AddMethod("volume", "音量律动效果", ParameterList(), [this](const ParameterList &) {
+//                 effect_type_ = EFFECT_VOLUME;
+//                 StartEffectTask();
+//             });
+
+//                 // IoT方法：关灯
+//             methods_.AddMethod("off", "关闭灯带", ParameterList(), [this](const ParameterList &) {
+//                 StopEffectTask();
+//             });
+//         }
+
+//         ~Ws2812Controller() {
+//             StopEffectTask();
+//             if (adc_handle_) {
+//                 adc_oneshot_del_unit(adc_handle_);
+//             }
+//         }
+//     };
+
+// } // namespace iot
+
+// // 宏，注册为IoT设备
+// DECLARE_THING(Ws2812Controller);
+
+#include <esp_log.h>
+#include "iot/thing.h"
+#include "driver/gpio.h"
+#include "led_strip.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "config.h"
+
+#define TAG "Ws2812Controller"
+#define WS2812_GPIO         2
+#define WS2812_LED_NUM      64    // 总灯珠数
+#define WS2812_LED_NUM_USED 8     // 实际用的灯珠数
+
+namespace iot
+{
+    enum Ws2812EffectType {
+        EFFECT_OFF = 0,
+        EFFECT_BREATH = 1,
+        EFFECT_VOLUME = 2
+    };
+
+    class Ws2812Controller : public Thing
+    {
+    private:
+        led_strip_handle_t led_strip_ = nullptr;
+        TaskHandle_t effect_task_handle_ = nullptr;
+        volatile Ws2812EffectType effect_type_ = EFFECT_OFF;
+        volatile bool running_ = false;
+
+        static void EffectTask(void *arg) {
+            Ws2812Controller *self = static_cast<Ws2812Controller *>(arg);
+            int dir = 1, brightness = 0;
+            static int fake_level = 0, fake_dir = 1;
+            while (self->running_) {
+                if (self->effect_type_ == EFFECT_BREATH) {
+                    // 呼吸灯：只点亮前8颗
+                    for (int i = 0; i < WS2812_LED_NUM_USED; i++) {
+                        led_strip_set_pixel(self->led_strip_, i, 0, 0, brightness);
+                    }
+                    for (int i = WS2812_LED_NUM_USED; i < WS2812_LED_NUM; i++) {
+                        led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+                    }
+                    led_strip_refresh(self->led_strip_);
+                    brightness += dir * 5;
+                    if (brightness >= 80) { brightness = 80; dir = -1; }
+                    if (brightness <= 0)  { brightness = 0; dir = 1; }
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                } else if (self->effect_type_ == EFFECT_VOLUME) {
+                    // 音量律动（用模拟数据，避免ADC与音频冲突）
+                    fake_level += fake_dir;
+                    if (fake_level >= WS2812_LED_NUM_USED) { fake_level = WS2812_LED_NUM_USED; fake_dir = -1; }
+                    if (fake_level <= 0) { fake_level = 0; fake_dir = 1; }
+                    for (int i = 0; i < WS2812_LED_NUM_USED; i++) {
+                        if (i < fake_level)
+                            led_strip_set_pixel(self->led_strip_, i, 0, 255, 0); // 绿色
+                        else
+                            led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);   // 熄灭
+                    }
+                    for (int i = WS2812_LED_NUM_USED; i < WS2812_LED_NUM; i++) {
+                        led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+                    }
+                    led_strip_refresh(self->led_strip_);
+                    vTaskDelay(pdMS_TO_TICKS(80));
+                } else {
+                    // 关灯
+                    for (int i = 0; i < WS2812_LED_NUM; i++) {
+                        led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+                    }
+                    led_strip_refresh(self->led_strip_);
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+            // 退出时关灯
+            for (int i = 0; i < WS2812_LED_NUM; i++) {
+                led_strip_set_pixel(self->led_strip_, i, 0, 0, 0);
+            }
+            led_strip_refresh(self->led_strip_);
+            self->effect_task_handle_ = nullptr;
+            vTaskDelete(NULL);
+        }
+
+        void StartEffectTask() {
+            if (!running_) {
+                running_ = true;
+                xTaskCreate(EffectTask, "ws2812_effect", 4096, this, 5, &effect_task_handle_);
+            }
+        }
+
+        void StopEffectTask() {
+            running_ = false;
+            effect_type_ = EFFECT_OFF;
+            // 等待任务安全退出
+            while (effect_task_handle_ != nullptr) {
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+        }
+
+    public:
+        Ws2812Controller() : Thing("Ws2812Controller", "WS2812灯带控制器")
+        {
+            // esp-hi风格初始化
+            led_strip_config_t strip_config = {
+                .strip_gpio_num = WS2812_GPIO,
+                .max_leds = WS2812_LED_NUM,
+                .led_model = LED_MODEL_WS2812,
+                .flags = {
+                    .invert_out = false
+                }
+            };
+            led_strip_rmt_config_t rmt_config = {
+                .clk_src = RMT_CLK_SRC_DEFAULT,
+                .resolution_hz = 10 * 1000 * 1000,
+                .flags = {
+                    .with_dma = false
+                }
+            };
+            ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip_));
+            led_strip_clear(led_strip_);
+
+            // IoT方法：呼吸灯
+            methods_.AddMethod("breath", "呼吸灯效果", ParameterList(), [this](const ParameterList &) {
+                effect_type_ = EFFECT_BREATH;
+                StartEffectTask();
+            });
+
+            // IoT方法：音量律动
+            methods_.AddMethod("volume", "音量律动效果", ParameterList(), [this](const ParameterList &) {
+                effect_type_ = EFFECT_VOLUME;
+                StartEffectTask();
+            });
+
+            // IoT方法：关灯
+            methods_.AddMethod("off", "关闭灯带", ParameterList(), [this](const ParameterList &) {
+                StopEffectTask();
+            });
+        }
+
+        ~Ws2812Controller() {
+            StopEffectTask();
+        }
+    };
+
+} // namespace iot
+
+// 宏，注册为IoT设备
+DECLARE_THING(Ws2812Controller);
+
+
+
+
