@@ -178,9 +178,24 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
        "reason": "wake_word_detected"
      }
      ```
-   - `reason` 值可为 `"wake_word_detected"` 或其他。
+   - `reason` 取值：
+     - `"wake_word_detected"`：用户唤醒词打断。
+     - `"urgent_alert"`：紧急传感器事件（如门磁开门），设备会先发本条 abort，再发一条 `sensor_event`；服务器可先播报提醒，再选择恢复未讲完的回答。
 
-4. **Wake Word Detected**  
+4. **Sensor Event（传感器事件，用于 AI 提醒）**  
+   - 设备端上报传感器事件（如门磁开门），由 AI 生成提醒并 TTS 播报；若当前正在播报，会先发 `abort`（reason: `urgent_alert`）再发本消息。  
+   - 例：
+     ```json
+     {
+       "session_id": "xxx",
+       "type": "sensor_event",
+       "content": "检测到有人开门，请提醒用户注意。",
+       "urgent": true
+     }
+     ```
+   - 服务器建议：根据 `content` 生成一句简短提醒并播报；若此前因 `urgent_alert` 打断，可在提醒播报完成后继续上一次未播完的回复（“通知完后再继续为讲完的话题”）。
+
+5. **Wake Word Detected**  
    - 用于设备端向服务器告知检测到唤醒词。
    - 在发送该消息之前，可提前发送唤醒词的 Opus 音频数据，用于服务器进行声纹检测。  
    - 例：
@@ -193,7 +208,7 @@ WebSocket 文本帧以 JSON 方式传输，以下为常见的 `"type"` 字段及
      }
      ```
 
-5. **MCP**
+6. **MCP**
    - 推荐用于物联网控制的新一代协议。所有设备能力发现、工具调用等均通过 type: "mcp" 的消息进行，payload 内部为标准 JSON-RPC 2.0（详见 [MCP 协议文档](./mcp-protocol.md)）。
    
    - **设备端到服务器发送 result 的例子：**

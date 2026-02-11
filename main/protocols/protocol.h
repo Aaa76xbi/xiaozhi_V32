@@ -32,7 +32,8 @@ struct BinaryProtocol3 {
 
 enum AbortReason {
     kAbortReasonNone,
-    kAbortReasonWakeWordDetected
+    kAbortReasonWakeWordDetected,
+    kAbortReasonUrgentAlert   // 紧急传感器事件（如开门），打断后由 AI 播报提醒，服务器可在此后恢复未讲完的回答
 };
 
 enum ListeningMode {
@@ -73,6 +74,8 @@ public:
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
+    /** 发送传感器事件给 AI，用于提醒（如开门）。若 AI 正在讲话会先打断再播报；服务器可支持在播报后恢复未讲完的回答 */
+    virtual void SendSensorEvent(const std::string& content);
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;

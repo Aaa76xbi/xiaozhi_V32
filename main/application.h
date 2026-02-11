@@ -51,6 +51,8 @@ public:
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
     void DismissAlert();
     void AbortSpeaking(AbortReason reason);
+    /** 紧急传感器提醒：若正在讲话则先打断，再上报内容给 AI 播报；通道未开则先建连再发。通知完后由服务器决定是否恢复未讲完的回答 */
+    void TriggerUrgentSensorAlert(const std::string& content);
     void ToggleChatState();
     void StartListening();
     void StopListening();
@@ -84,6 +86,7 @@ private:
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
+    std::string pending_sensor_event_;  // 通道未开时暂存，OnAudioChannelOpened 后发送
 
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);

@@ -43,6 +43,8 @@ void Protocol::SendAbortSpeaking(AbortReason reason) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"abort\"";
     if (reason == kAbortReasonWakeWordDetected) {
         message += ",\"reason\":\"wake_word_detected\"";
+    } else if (reason == kAbortReasonUrgentAlert) {
+        message += ",\"reason\":\"urgent_alert\"";
     }
     message += "}";
     SendText(message);
@@ -75,6 +77,20 @@ void Protocol::SendStopListening() {
 
 void Protocol::SendMcpMessage(const std::string& payload) {
     std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"mcp\",\"payload\":" + payload + "}";
+    SendText(message);
+}
+
+void Protocol::SendSensorEvent(const std::string& content) {
+    // 转义 content 中的 " 和 \ 以便放入 JSON 字符串
+    std::string escaped;
+    escaped.reserve(content.size() + 8);
+    for (char c : content) {
+        if (c == '"') escaped += "\\\"";
+        else if (c == '\\') escaped += "\\\\";
+        else if (c == '\n') escaped += "\\n";
+        else escaped += c;
+    }
+    std::string message = "{\"session_id\":\"" + session_id_ + "\",\"type\":\"sensor_event\",\"content\":\"" + escaped + "\",\"urgent\":true}";
     SendText(message);
 }
 

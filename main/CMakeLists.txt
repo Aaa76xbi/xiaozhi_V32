@@ -596,7 +596,8 @@ idf_component_register(SRCS ${SOURCES} "my_home_device.cc"
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
-                    REQUIRES esp_http_client json esp_psram spi_flash app_update esp_app_format esp_partition efuse esp_timer esp_system nvs_flash esp_wifi driver esp_adc
+                    # 👇 在 REQUIRES 列表末尾加上 esp_websocket_client 和 cJSON
+                    REQUIRES esp_http_client json esp_psram spi_flash app_update esp_app_format esp_partition efuse esp_timer esp_system nvs_flash esp_wifi driver esp_adc esp_websocket_client
                     )
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE

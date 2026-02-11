@@ -402,9 +402,17 @@ void Application::Start() {
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     mcp_server.AddUserOnlyTools();
-    // =========== 【在这里插入这一行】 ===========
+
+    // =========== 【修改开始】 ===========
+    // 1. 注册 HA 控制工具 (你原来已经有的)
     MyHomeDevice::GetInstance().RegisterHomeDeviceTools(); 
-    // ==========================================
+
+    // 2. 启动老人久坐监控
+    ESP_LOGI(TAG, "正在启动老人智能监控服务...");
+    MyHomeDevice::GetInstance().StartElderlyMonitor();
+    // 3. 启动门磁监控：检测到开门则上报 AI，可打断当前播报并提醒，通知完由服务器决定是否恢复未讲完的回答
+    MyHomeDevice::GetInstance().StartDoorMonitor();
+    // =========== 【修改结束】 ===========
 
     if (ota.HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
@@ -433,6 +441,12 @@ void Application::Start() {
         if (protocol_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
                 protocol_->server_sample_rate(), codec->output_sample_rate());
+        }
+        // 若因紧急传感器事件（如开门）而建连，建连后发送事件并进入 Listening 以接收 AI 提醒 TTS
+        if (!pending_sensor_event_.empty()) {
+            protocol_->SendSensorEvent(pending_sensor_event_);
+            pending_sensor_event_.clear();
+            SetDeviceState(kDeviceStateListening);
         }
     });
     protocol_->OnAudioChannelClosed([this, &board]() {
@@ -660,6 +674,23 @@ void Application::AbortSpeaking(AbortReason reason) {
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }
+}
+
+void Application::TriggerUrgentSensorAlert(const std::string& content) {
+    if (content.empty()) return;
+    Schedule([this, content]() {
+        if (!protocol_) return;
+        if (device_state_ == kDeviceStateSpeaking) {
+            AbortSpeaking(kAbortReasonUrgentAlert);
+        }
+        if (protocol_->IsAudioChannelOpened()) {
+            protocol_->SendSensorEvent(content);
+        } else {
+            pending_sensor_event_ = content;
+            SetDeviceState(kDeviceStateConnecting);
+            protocol_->OpenAudioChannel();
+        }
+    });
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
