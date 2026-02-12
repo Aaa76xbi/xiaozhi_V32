@@ -1,4 +1,4 @@
-、#include "my_home_device.h"
+#include "my_home_device.h"
 #include "application.h"
 #include <mcp_server.h>
 #include <esp_http_client.h>
@@ -60,6 +60,7 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
     esp_http_client_config_t config = {};
     config.url = url;
     config.method = HTTP_METHOD_POST;
+    config.timeout_ms = 5000;
     esp_http_client_handle_t client = esp_http_client_init(&config);
     char auth_header[512];
     snprintf(auth_header, sizeof(auth_header), "Bearer %s", token);
@@ -76,7 +77,7 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
 
 void MyHomeDevice::RegisterHomeDeviceTools() {
     auto& server = McpServer::GetInstance();
-    server.AddTool("control_home_device", "控制家电(plug/tv/water_valve/gas_valve/main_switch),action(on/off/query)",
+    server.AddTool("control_home_device", "控制家电",
         PropertyList({Property("device", kPropertyTypeString), Property("action", kPropertyTypeString)}),
         [this](const PropertyList& props) -> ReturnValue {
             std::string device = props["device"].value<std::string>();
