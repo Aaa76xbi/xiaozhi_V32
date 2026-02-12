@@ -5,7 +5,7 @@
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <esp_websocket_client.h> // ⚠️ 必须在 CMakeLists.txt 添加 esp_websocket_client
+#include <esp_websocket_client.h> 
 
 // =================【配置 A：老设备 (外网 HA)】=================
 #define HA_OLD_URL   "http://home.dalinziyo.site/api"
@@ -36,6 +36,8 @@ public:
         return instance;
     }
 
+    // ❌ 删除了这里的 GetProtocol，因为它属于 Application 类，不属于这里
+
     // 注册 HA 控制工具给 AI
     void RegisterHomeDeviceTools();
 
@@ -48,10 +50,10 @@ public:
 
     // 【核心】将传感器状态上报给 AI 大脑
     // content: 事件描述
-    // is_urgent: 是否为紧急事件（如开门、久坐报警）；true 时会打断当前播报并让 AI 先提醒，再由服务器决定是否恢复未讲完的回答
+    // is_urgent: 是否为紧急事件
     void ReportStatusToAI(const std::string& content, bool is_urgent = false);
 
-    // 启动门磁监控：轮询 HA 门传感器，检测到开门时自动上报 AI 并提醒用户（可打断正在播放的回复）
+    // 启动门磁监控
     void StartDoorMonitor();
 
 private:

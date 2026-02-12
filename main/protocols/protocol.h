@@ -6,6 +6,9 @@
 #include <functional>
 #include <chrono>
 #include <vector>
+#include <memory>
+
+// ================== 补充缺失的结构体定义 ==================
 
 struct AudioStreamPacket {
     int sample_rate = 0;
@@ -14,6 +17,7 @@ struct AudioStreamPacket {
     std::vector<uint8_t> payload;
 };
 
+// 协议头定义 (之前被误删的部分)
 struct BinaryProtocol2 {
     uint16_t version;
     uint16_t type;          // Message type (0: OPUS, 1: JSON)
@@ -30,31 +34,27 @@ struct BinaryProtocol3 {
     uint8_t payload[];
 } __attribute__((packed));
 
+// ========================================================
+
 enum AbortReason {
     kAbortReasonNone,
     kAbortReasonWakeWordDetected,
-    kAbortReasonUrgentAlert   // 紧急传感器事件（如开门），打断后由 AI 播报提醒，服务器可在此后恢复未讲完的回答
+    kAbortReasonUrgentAlert
 };
 
 enum ListeningMode {
     kListeningModeAutoStop,
     kListeningModeManualStop,
-    kListeningModeRealtime // 需要 AEC 支持
+    kListeningModeRealtime
 };
 
 class Protocol {
 public:
     virtual ~Protocol() = default;
 
-    inline int server_sample_rate() const {
-        return server_sample_rate_;
-    }
-    inline int server_frame_duration() const {
-        return server_frame_duration_;
-    }
-    inline const std::string& session_id() const {
-        return session_id_;
-    }
+    inline int server_sample_rate() const { return server_sample_rate_; }
+    inline int server_frame_duration() const { return server_frame_duration_; }
+    inline const std::string& session_id() const { return session_id_; }
 
     void OnIncomingAudio(std::function<void(std::unique_ptr<AudioStreamPacket> packet)> callback);
     void OnIncomingJson(std::function<void(const cJSON* root)> callback);
@@ -74,8 +74,10 @@ public:
     virtual void SendStopListening();
     virtual void SendAbortSpeaking(AbortReason reason);
     virtual void SendMcpMessage(const std::string& message);
-    /** 发送传感器事件给 AI，用于提醒（如开门）。若 AI 正在讲话会先打断再播报；服务器可支持在播报后恢复未讲完的回答 */
     virtual void SendSensorEvent(const std::string& content);
+
+    // ✅ 【SendText 必须放在 public 区域】
+    virtual bool SendText(const std::string& text) = 0;
 
 protected:
     std::function<void(const cJSON* root)> on_incoming_json_;
@@ -92,10 +94,8 @@ protected:
     std::string session_id_;
     std::chrono::time_point<std::chrono::steady_clock> last_incoming_time_;
 
-    virtual bool SendText(const std::string& text) = 0;
     virtual void SetError(const std::string& message);
     virtual bool IsTimeout() const;
 };
 
 #endif // PROTOCOL_H
-

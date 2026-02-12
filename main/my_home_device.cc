@@ -7,6 +7,8 @@
 #include <esp_log.h>
 #include <string.h>
 #include <esp_timer.h>
+#include "protocols/protocol.h"
+#include "board.h"
 
 #define TAG "HomeDevice"
 #define MON_TAG "ElderlyMonitor"
@@ -37,7 +39,7 @@ std::string MyHomeDevice::GetEntityState(const char* base_url, const char* token
     char url[256];
     snprintf(url, sizeof(url), "%s/states/%s", base_url, entity_id);
 
-    ESP_LOGI(TAG, "Querying State: %s", url);
+    // ESP_LOGI(TAG, "Querying State: %s", url); // 减少日志刷屏
 
     std::string response_buffer;
 
@@ -119,16 +121,42 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
 // =================================================================================
 
 // 【核心函数】上报状态给 AI 管家
+// ✅ 修改后：先检查 Session ID，没有连接好就不发，保护连接
+
+// 修改 main/my_home_device.cc
+
+// 在 main/my_home_device.cc 中
+
 void MyHomeDevice::ReportStatusToAI(const std::string& content, bool is_urgent) {
     ESP_LOGI(MON_TAG, "📤 [上报 AI] 事件: %s | 紧急: %d", content.c_str(), is_urgent);
 
-    if (is_urgent) {
-        // 紧急事件：通过 Application 打断当前播报（若在讲话）、上报给 AI，由 AI 播报提醒；服务器可在此后恢复未讲完的回答
-        Application::GetInstance().TriggerUrgentSensorAlert(content);
-    }
-    // 非紧急事件可在此扩展：如写入上下文、仅记录等
-}
+    auto* app = &Application::GetInstance();
+    
+    if (app) {
+        // ---------------------------------------------------------
+        // 策略：门磁触发只做本地语音播报，不发送给 AI 对话，防止断网。
+        // ---------------------------------------------------------
 
+        if (is_urgent) {
+            ESP_LOGI(MON_TAG, "🔊 触发本地提醒 (门开了)");
+            
+            // ✅ 1. 强制设置最大音量 (0-100)
+            // 修改说明：SetOutputVolume 是 AudioCodec 的方法，必须通过 Board 获取
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            if (codec) {
+                codec->SetOutputVolume(100); 
+            }
+            
+            // ✅ 2. 播放本地音频 (建议连续播两次以防吞音)
+            app->PlaySound("common/exclamation.ogg");
+            // vTaskDelay(pdMS_TO_TICKS(500)); // 可选：间隔一下
+            // app->PlaySound("common/exclamation.ogg"); // 可选：再播一次加强提醒
+        }
+
+        // 屏蔽网络发送，只保留本地提醒
+        ESP_LOGW(MON_TAG, "🚫 为了保持连接稳定，本次仅本地提醒，不发送给 AI");
+    }
+}
 // 自动登录获取 UID
 bool MyHomeDevice::PerformMonitorLogin() {
     ESP_LOGI(MON_TAG, "正在登录监控平台...");
@@ -331,7 +359,7 @@ void MyHomeDevice::DoorMonitorTask(void* arg) {
 }
 
 void MyHomeDevice::StartDoorMonitor() {
-    xTaskCreate(DoorMonitorTask, "door_monitor", 3072, nullptr, 4, NULL);
+    xTaskCreate(DoorMonitorTask, "door_monitor", 4096, nullptr, 4, NULL);
     ESP_LOGI(DOOR_TAG, "门磁监控已启动，轮询间隔 %d 秒", DOOR_POLL_INTERVAL_MS / 1000);
 }
 
