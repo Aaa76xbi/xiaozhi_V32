@@ -174,6 +174,20 @@ void handle_ws_message(const char *payload) {
     bool is_leave_msg = (strstr(payload, "\\u79bb\\u5750") != NULL) || 
                         (strstr(payload, "\\u79bb\\u5367") != NULL);
 
+    // 确保 main.cc 里的 handle_ws_message 包含此段逻辑
+    if (strstr(payload, "u5728\\u5750") || strstr(payload, "u5728\\u5367")) {
+        if (!g_is_sitting) {
+            g_is_sitting = true;
+            g_sit_start_time = get_time_ms();
+            g_has_alerted = false;
+            ESP_LOGI(TAG, "👇 状态更新：已坐下，发送 AI 指令...");
+            
+            // 关键：给系统留出 500ms 处理 MQTT 的时间
+            vTaskDelay(pdMS_TO_TICKS(500)); 
+            send_to_ai("系统检测到主人刚刚坐下了。请用热情、温暖的语气问候主人，并询问是否需要打开电视或打开窗帘？");
+        }
+    }
+
     // --- 场景 A: 坐下 ---
     if (is_sitting_msg) {
         ESP_LOGI(TAG, "🔔 匹配到：在坐/在卧 (Unicode)");
