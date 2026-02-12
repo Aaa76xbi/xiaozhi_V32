@@ -278,8 +278,9 @@ extern "C" void app_main(void)
     // ... 原有的初始化代码 (NVS, Wi-Fi 等) ...
     // 请保留 Application::GetInstance().Start() 之前的初始化内容
     
-    // [插入] 启动我们的监控任务
-    xTaskCreate(sensor_monitor_task, "sensor_task", 8192, NULL, 5, NULL);
+    
 
     Application::GetInstance().Start();
+    // [插入] 启动我们的监控任务
+    xTaskCreate(sensor_monitor_task, "sensor_task", 8192, NULL, 5, NULL);
 }
