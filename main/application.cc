@@ -408,10 +408,10 @@ void Application::Start() {
     MyHomeDevice::GetInstance().RegisterHomeDeviceTools(); 
 
     // 2. 启动老人久坐监控
-    ESP_LOGI(TAG, "正在启动老人智能监控服务...");
-    MyHomeDevice::GetInstance().StartElderlyMonitor();
-    // 3. 启动门磁监控：检测到开门则上报 AI，可打断当前播报并提醒，通知完由服务器决定是否恢复未讲完的回答
-    MyHomeDevice::GetInstance().StartDoorMonitor();
+    // ESP_LOGI(TAG, "正在启动老人智能监控服务...");
+    // MyHomeDevice::GetInstance().StartElderlyMonitor();
+    // // 3. 启动门磁监控：检测到开门则上报 AI，可打断当前播报并提醒，通知完由服务器决定是否恢复未讲完的回答
+    // MyHomeDevice::GetInstance().StartDoorMonitor();
     // =========== 【修改结束】 ===========
 
     if (ota.HasMqttConfig()) {
