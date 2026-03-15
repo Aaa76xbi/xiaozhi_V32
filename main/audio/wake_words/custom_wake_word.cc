@@ -95,6 +95,10 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
         threshold_ = CONFIG_CUSTOM_WAKE_WORD_THRESHOLD / 100.0f;
         commands_.push_back({CONFIG_CUSTOM_WAKE_WORD, CONFIG_CUSTOM_WAKE_WORD_DISPLAY, "wake"});
 #endif
+        // 紧急求助词：无需配置，始终注册
+        commands_.push_back({"救命救命", "救命救命", "wake"});
+        commands_.push_back({"救救我", "救救我", "wake"});
+        commands_.push_back({"小益救我", "小益救我", "wake"});
     } else {
         models_ = models_list;
         ParseWakenetModelConfig();

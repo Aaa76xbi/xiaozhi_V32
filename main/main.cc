@@ -9,7 +9,8 @@
 #include "esp_websocket_client.h"
 #include "cJSON.h"
 #include "application.h"
-#include "nvs_flash.h"        // [新增] 必须包含这个头文件
+#include "nvs_flash.h"
+#include "esp_event.h"
 
 // ===================== 1. 配置区域 =====================
 
@@ -293,7 +294,10 @@ void sensor_monitor_task(void *pvParameters) {
 
 extern "C" void app_main(void)
 {
-    // [修复点] 必须先初始化 NVS，否则系统会崩
+    // 初始化默认事件循环（Wi-Fi/IP 事件依赖此）
+    ESP_ERROR_CHECK(esp_event_loop_create_default());
+
+    // 初始化 NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -307,5 +311,5 @@ extern "C" void app_main(void)
     // 启动传感器监控任务
     // xTaskCreate(sensor_monitor_task, "sensor_task", 8192, NULL, 5, NULL);
     // main/main.cc
-    xTaskCreate(sensor_monitor_task, "sensor_task", 10240, NULL, 10, NULL);
+    xTaskCreate(sensor_monitor_task, "sensor_task", 10240, NULL, 2, NULL);
 }

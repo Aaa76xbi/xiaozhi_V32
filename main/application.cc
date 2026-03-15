@@ -648,6 +648,16 @@ void Application::OnWakeWordDetected() {
 
         auto wake_word = audio_service_.GetLastWakeWord();
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+
+        // 检测是否为紧急求助词
+        auto IsEmergencyWakeWord = [](const std::string& w) {
+            return w.find("救命") != std::string::npos ||
+                   w.find("救救我") != std::string::npos ||
+                   w.find("救我") != std::string::npos ||
+                   w.find("帮帮我") != std::string::npos;
+        };
+        bool is_emergency = IsEmergencyWakeWord(wake_word);
+
 #if CONFIG_SEND_WAKE_WORD_DATA
         // Encode and send the wake word data to the server
         while (auto packet = audio_service_.PopWakeWordPacket()) {
@@ -661,6 +671,15 @@ void Application::OnWakeWordDetected() {
         // Play the pop up sound to indicate the wake word is detected
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 #endif
+        // 若为紧急求助，注入急救提示让 AI 主动询问是否需要报警
+        if (is_emergency) {
+            ESP_LOGW(TAG, "紧急唤醒词检测到: %s，注入急救提示", wake_word.c_str());
+            Schedule([this]() {
+                if (protocol_) {
+                    protocol_->SendText("【系统检测到用户呼救】请立刻以非常关切的语气询问用户：'你好，我听到你在呼救，你现在安全吗？需要我帮你立刻报警吗？'。若用户确认需要，立即调用 trigger_alarm 工具。");
+                }
+            });
+        }
     } else if (device_state_ == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (device_state_ == kDeviceStateActivating) {
