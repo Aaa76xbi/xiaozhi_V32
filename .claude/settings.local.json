@@ -1,41 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find:*)",
-      "Bash(wc:*)",
-      "Bash(ls:*)",
-      "Bash(idf.py -p COM10 flash 2>&1)",
-      "Bash(where:*)",
-      "Bash(D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/esptool.exe --chip esp32s3 -p COM10 -b 921600 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 build/bootloader/bootloader.bin 0x20000 build/xiaozhi.bin 0x8000 build/partition_table/partition-table.bin 0xd000 build/ota_data_initial.bin 0x800000 build/generated_assets.bin 2>&1)",
-      "Bash(D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/esptool.exe --chip esp32s3 -p COM10 -b 115200 read_flash_status 2>&1 | head -5)",
-      "Bash(python:*)",
-      "Bash(cmd /c \"D:\\\\\\\\espreseeif\\\\\\\\Espressif\\\\\\\\frameworks\\\\\\\\esp-idf-v5.5.2\\\\\\\\export.bat && cd /d D:\\\\\\\\xiaozhi_AI\\\\\\\\xiaozhiAI4\\\\\\\\xiaozhi_V32 && idf.py build\" 2>&1 | tail -30)",
-      "Bash(cmd /c \"cd /d D:\\\\\\\\xiaozhi_AI\\\\\\\\xiaozhiAI4\\\\\\\\xiaozhi_V32 && D:\\\\\\\\espreseeif\\\\\\\\Espressif\\\\\\\\python_env\\\\\\\\idf5.5_py3.11_env\\\\\\\\Scripts\\\\\\\\python.exe D:\\\\\\\\espreseeif\\\\\\\\Espressif\\\\\\\\frameworks\\\\\\\\esp-idf-v5.5.2\\\\\\\\tools\\\\\\\\idf.py build 2>&1\" | tail -30)",
-      "Bash(D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/python.exe D:/espreseeif/Espressif/frameworks/esp-idf-v5.5.2/tools/idf.py --project-dir D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32 build 2>&1 | tail -40)",
-      "Bash(D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/python.exe D:/espreseeif/Espressif/frameworks/esp-idf-v5.5.1/tools/idf.py --project-dir D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32 build 2>&1 | tail -40)",
-      "Bash(cmd.exe /c \"set IDF_PATH=D:\\\\espreseeif\\\\Espressif\\\\frameworks\\\\esp-idf-v5.5.1 && set IDF_PYTHON_ENV_PATH=D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.11_env && set PATH=D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.11_env\\\\Scripts;D:\\\\espreseeif\\\\Espressif\\\\tools\\\\cmake\\\\3.30.5\\\\bin;D:\\\\espreseeif\\\\Espressif\\\\tools\\\\ninja\\\\1.12.1;%PATH% && cd /d D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32 && python D:\\\\espreseeif\\\\Espressif\\\\frameworks\\\\esp-idf-v5.5.1\\\\tools\\\\idf.py build 2>&1\" | tail -40)",
-      "Bash(cmd.exe /c \"set IDF_PATH=D:\\\\espreseeif\\\\Espressif\\\\frameworks\\\\esp-idf-v5.5.1 && set PATH=D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.11_env\\\\Scripts;D:\\\\espreseeif\\\\Espressif\\\\tools\\\\cmake\\\\3.30.5\\\\bin;D:\\\\espreseeif\\\\Espressif\\\\tools\\\\ninja\\\\1.12.1;%PATH% && cd /d D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32 && python D:\\\\espreseeif\\\\Espressif\\\\frameworks\\\\esp-idf-v5.5.1\\\\tools\\\\idf.py build > D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\build_log.txt 2>&1 && echo BUILD_OK\")",
-      "Bash(MSYSTEM=\"\" D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/python.exe D:/esp-idf-v55/v5.5.2/esp-idf/tools/idf.py --project-dir D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32 build 2>&1 | tail -20)",
-      "Bash(MSYSTEM=\"\" D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/python.exe D:/esp-idf-v55/v5.5.2/esp-idf/tools/idf.py --project-dir D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32 build 2>&1)",
-      "Bash(unset:*)",
-      "Bash(env -u MSYSTEM D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/python.exe -c \"import os; print\\('MSYSTEM in env:', 'MSYSTEM' in os.environ\\)\")",
-      "Bash(D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/esptool.exe --chip esp32s3 -p COM10 -b 921600 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/bootloader/bootloader.bin 0x8000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/partition_table/partition-table.bin 0xd000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/ota_data_initial.bin 0x20000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/xiaozhi.bin 0x800000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/generated_assets.bin 2>&1)",
-      "Bash(D:/espreseeif/Espressif/python_env/idf5.5_py3.11_env/Scripts/esptool.exe --chip esp32s3 -p COM9 -b 921600 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/bootloader/bootloader.bin 0x8000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/partition_table/partition-table.bin 0xd000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/ota_data_initial.bin 0x20000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/xiaozhi.bin 0x800000 D:/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32/build/generated_assets.bin 2>&1)",
-      "Bash(grep:*)",
-      "Bash(cd:*)",
-      "Bash(powershell.exe -Command \"cd 'D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32'; & 'D:\\\\espreseeif\\\\Espressif\\\\tools\\\\idf-exe\\\\1.0.3\\\\idf.py.exe' build 2>&1 | Select-Object -Last 40\")",
-      "Read(//d/espreseeif/Espressif/**)",
-      "Read(//d/esp-idf-v55/v5.5.2/esp-idf/**)",
-      "Bash(cmd.exe /c \"cd /d D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32 && call D:\\\\espreseeif\\\\Espressif\\\\idf_cmd_init.bat && idf.py build 2>&1\" 2>&1 | tail -40)",
-      "Bash(cmd.exe /c \"call D:\\\\espreseeif\\\\Espressif\\\\idf_cmd_init.bat && cd /d D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32 && idf.py build 2>&1\" 2>&1 | tail -50)",
-      "Bash(cmd.exe /c \"D:\\\\espreseeif\\\\Espressif\\\\idf_cmd_init.bat && echo ENV_READY && cd /d D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32 && idf.py --version\" 2>&1)",
-      "Bash(cmd.exe /c \"set IDF_PATH=d:\\\\esp-idf-v55\\\\v5.5.2\\\\esp-idf && set IDF_TOOLS_PATH=D:\\\\espreseeif\\\\Espressif && cd /d D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32 && D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.11_env\\\\Scripts\\\\python.exe d:\\\\esp-idf-v55\\\\v5.5.2\\\\esp-idf\\\\tools\\\\idf.py --version 2>&1\")",
-      "Bash(cmd.exe /c \"D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.11_env\\\\Scripts\\\\python.exe --version > C:\\\\Temp\\\\out.txt 2>&1\")",
-      "Read(//c/Temp/**)",
-      "Bash(echo:*)",
-      "Bash(sed:*)",
-      "Bash(cp:*)",
-      "Bash(powershell.exe -NoProfile -Command \"\n\\\\$env:MSYSTEM = ''\n\\\\$env:IDF_PATH = 'd:\\\\esp-idf-v55\\\\v5.5.2\\\\esp-idf'\n\\\\$env:IDF_TOOLS_PATH = 'D:\\\\espreseeif\\\\Espressif'\nSet-Location 'D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32'\n& 'D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.11_env\\\\Scripts\\\\python.exe' 'd:\\\\esp-idf-v55\\\\v5.5.2\\\\esp-idf\\\\tools\\\\idf.py' -p COM10 build flash 2>&1\n\" 2>&1 | Select-String -Pattern 'rror|arning|Linking|Flash|Done|FAILED|Wrote|built' | Select-Object -Last 20)"
+      "Read(//c/Users/辛碧军/.claude/**)",
+      "Read(//c/Users/辛碧军/.config/claude/**)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); mcp=d.get\\(''''mcpServers'''', {}\\); print\\(json.dumps\\(mcp, indent=2, ensure_ascii=False\\)\\)\")",
+      "Bash(find /d/xiaozhi_AI/xiaozhiAI4/xiaozhi_V32 -type f -name *home_device* -o -name *my_home* -o -name *mcp_server* -o -name *mcp* -o -name application.cc -o -name main.cc)"
     ]
   }
 }

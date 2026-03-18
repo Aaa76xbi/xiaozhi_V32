@@ -11,6 +11,7 @@
 #include <esp_pthread.h>
 
 #include "application.h"
+#include "my_home_device.h"
 #include "display.h"
 #include "oled_display.h"
 #include "board.h"
@@ -339,13 +340,16 @@ void McpServer::ParseCapabilities(const cJSON* capabilities) {
         auto url = cJSON_GetObjectItem(vision, "url");
         auto token = cJSON_GetObjectItem(vision, "token");
         if (cJSON_IsString(url)) {
+            std::string url_str = std::string(url->valuestring);
+            std::string token_str;
+            if (cJSON_IsString(token)) {
+                token_str = std::string(token->valuestring);
+            }
+            // 同步给 HA 摄像头描述功能使用
+            SetVisionUrl(url_str, token_str);
+            // 同时设置设备自带摄像头（如有）
             auto camera = Board::GetInstance().GetCamera();
             if (camera) {
-                std::string url_str = std::string(url->valuestring);
-                std::string token_str;
-                if (cJSON_IsString(token)) {
-                    token_str = std::string(token->valuestring);
-                }
                 camera->SetExplainUrl(url_str, token_str);
             }
         }

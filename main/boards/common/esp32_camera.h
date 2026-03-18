@@ -33,6 +33,7 @@ public:
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;
     virtual std::string Explain(const std::string& question);
+    virtual std::string ExplainFromUrl(const std::string& image_url, const std::string& image_token, const std::string& question) override;
 };
 
 #endif // ESP32_CAMERA_H

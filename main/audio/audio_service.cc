@@ -326,6 +326,9 @@ void AudioService::OpusCodecTask() {
                 }
 
                 lock.lock();
+                if (audio_playback_queue_.empty()) {
+                    ESP_LOGI(TAG, "First decoded packet pushed to playback queue");
+                }
                 audio_playback_queue_.push_back(std::move(task));
                 audio_queue_cv_.notify_all();
             } else {
@@ -415,8 +418,12 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
         if (wait) {
             audio_queue_cv_.wait(lock, [this]() { return audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE; });
         } else {
+            ESP_LOGW(TAG, "Decode queue full, dropping packet");
             return false;
         }
+    }
+    if (audio_decode_queue_.empty()) {
+        ESP_LOGI(TAG, "First packet pushed to decode queue");
     }
     audio_decode_queue_.push_back(std::move(packet));
     audio_queue_cv_.notify_all();
@@ -622,6 +629,15 @@ void AudioService::PlaySound(const std::string_view& ogg) {
 bool AudioService::IsIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();
+}
+
+void AudioService::PrepareOutput() {
+    if (!codec_->output_enabled()) {
+        esp_timer_stop(audio_power_timer_);
+        esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
+        codec_->EnableOutput(true);
+    }
+    last_output_time_ = std::chrono::steady_clock::now();
 }
 
 void AudioService::ResetDecoder() {

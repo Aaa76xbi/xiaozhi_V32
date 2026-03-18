@@ -465,12 +465,14 @@ void Application::Start() {
             if (strcmp(state->valuestring, "start") == 0) {
                 Schedule([this]() {
                     aborted_ = false;
-                    if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
+                    if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening || device_state_ == kDeviceStateConnecting) {
                         SetDeviceState(kDeviceStateSpeaking);
                     }
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
+                    // AI 说完一轮话，若 trigger_alarm 已就绪则开始6秒倒计时
+                    StartAlarmCountdown();
                     if (device_state_ == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
@@ -494,6 +496,20 @@ void Application::Start() {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
+                    // 检测紧急求救词，直接就绪报警，不依赖 AI 调用 trigger_alarm
+                    if (message.find("救命") != std::string::npos ||
+                        message.find("求救") != std::string::npos ||
+                        message.find("呼救") != std::string::npos ||
+                        message.find("救救我") != std::string::npos) {
+                        ArmAlarm();
+                    }
+                    // 检测取消词，直接取消报警，不依赖 AI 调用 cancel_alarm
+                    if (message.find("取消") != std::string::npos ||
+                        message.find("不需要") != std::string::npos ||
+                        message.find("没事") != std::string::npos ||
+                        message.find("不报警") != std::string::npos) {
+                        CancelAlarm();
+                    }
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
@@ -651,19 +667,33 @@ void Application::OnWakeWordDetected() {
 
         // 检测是否为紧急求助词
         auto IsEmergencyWakeWord = [](const std::string& w) {
-            return w.find("救命") != std::string::npos ||
-                   w.find("救救我") != std::string::npos ||
-                   w.find("救我") != std::string::npos ||
-                   w.find("帮帮我") != std::string::npos;
+            return w.find("救救我") != std::string::npos ||
+                   w.find("小益救命") != std::string::npos;
         };
         bool is_emergency = IsEmergencyWakeWord(wake_word);
 
+        if (is_emergency) {
+            ESP_LOGW(TAG, "紧急唤醒词检测到: %s，发送紧急传感器事件", wake_word.c_str());
+            while (auto packet = audio_service_.PopWakeWordPacket()) {
+                protocol_->SendAudio(std::move(packet));
+            }
+            // SendWakeWordDetected 传实际唤醒词（"救救我"/"小益救命"），服务器 AI 会据此生成紧急问题。
+            // SendSensorEvent 补充上下文，确保 AI 等用户明确回答后再调用 trigger_alarm。
+            protocol_->SendWakeWordDetected(wake_word);
+            SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+            protocol_->SendSensorEvent(
+                "【紧急唤醒】用户说了\"" + wake_word + "\"请求帮助。"
+                "必须等用户在下一轮语音中明确回答后，才可以调用 trigger_alarm，"
+                "不可在本次回答中同时提问并触发报警。"
+            );
+            return;
+        }
+
 #if CONFIG_SEND_WAKE_WORD_DATA
-        // Encode and send the wake word data to the server
+        // 正常唤醒词：发送唤醒音频给服务器
         while (auto packet = audio_service_.PopWakeWordPacket()) {
             protocol_->SendAudio(std::move(packet));
         }
-        // Set the chat state to wake word detected
         protocol_->SendWakeWordDetected(wake_word);
         SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #else
@@ -671,15 +701,6 @@ void Application::OnWakeWordDetected() {
         // Play the pop up sound to indicate the wake word is detected
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
 #endif
-        // 若为紧急求助，注入急救提示让 AI 主动询问是否需要报警
-        if (is_emergency) {
-            ESP_LOGW(TAG, "紧急唤醒词检测到: %s，注入急救提示", wake_word.c_str());
-            Schedule([this]() {
-                if (protocol_) {
-                    protocol_->SendText("【系统检测到用户呼救】请立刻以非常关切的语气询问用户：'你好，我听到你在呼救，你现在安全吗？需要我帮你立刻报警吗？'。若用户确认需要，立即调用 trigger_alarm 工具。");
-                }
-            });
-        }
     } else if (device_state_ == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (device_state_ == kDeviceStateActivating) {
@@ -767,6 +788,7 @@ void Application::SetDeviceState(DeviceState state) {
                 // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
             }
+            audio_service_.PrepareOutput();
             audio_service_.ResetDecoder();
             break;
         default:

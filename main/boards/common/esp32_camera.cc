@@ -9,6 +9,7 @@
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <cstring>
+#include <network_interface.h>
 
 #define TAG "Esp32Camera"
 
@@ -256,5 +257,79 @@ std::string Esp32Camera::Explain(const std::string& question) {
     size_t remain_stack_size = uxTaskGetStackHighWaterMark(nullptr);
     ESP_LOGI(TAG, "Explain image size=%dx%d, compressed size=%d, remain stack size=%d, question=%s\n%s",
         fb_->width, fb_->height, total_sent, remain_stack_size, question.c_str(), result.c_str());
+    return result;
+}
+
+std::string Esp32Camera::ExplainFromUrl(const std::string& image_url, const std::string& image_token, const std::string& question) {
+    if (explain_url_.empty()) {
+        throw std::runtime_error("Vision server URL not configured");
+    }
+
+    auto network = Board::GetInstance().GetNetwork();
+
+    // Step 1: 从 HA camera proxy 下载 JPEG
+    std::string jpeg_data;
+    {
+        auto http = network->CreateHttp();
+        if (!image_token.empty()) {
+            http->SetHeader("Authorization", "Bearer " + image_token);
+        }
+        if (!http->Open("GET", image_url)) {
+            throw std::runtime_error("Failed to connect to HA camera proxy");
+        }
+        int status = http->GetStatusCode();
+        if (status != 200) {
+            http->Close();
+            throw std::runtime_error(std::string("HA camera proxy error, status: ") + std::to_string(status));
+        }
+        jpeg_data = http->ReadAll();
+        http->Close();
+    }
+
+    if (jpeg_data.empty()) {
+        throw std::runtime_error("HA camera returned empty image");
+    }
+    ESP_LOGI(TAG, "Downloaded JPEG from HA: %d bytes", (int)jpeg_data.size());
+
+    // Step 2: 发送 JPEG 到 AI 视觉服务器（与 Explain() 同样的 multipart/form-data 格式）
+    auto http = network->CreateHttp();
+    std::string boundary = "----ESP32_HA_CAM_BOUNDARY";
+
+    http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
+    http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
+    if (!explain_token_.empty()) {
+        http->SetHeader("Authorization", "Bearer " + explain_token_);
+    }
+    http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+    http->SetHeader("Transfer-Encoding", "chunked");
+
+    if (!http->Open("POST", explain_url_)) {
+        throw std::runtime_error("Failed to connect to vision server");
+    }
+
+    std::string q_field = "--" + boundary + "\r\n"
+        "Content-Disposition: form-data; name=\"question\"\r\n\r\n"
+        + question + "\r\n";
+    http->Write(q_field.c_str(), q_field.size());
+
+    std::string f_header = "--" + boundary + "\r\n"
+        "Content-Disposition: form-data; name=\"file\"; filename=\"ha_camera.jpg\"\r\n"
+        "Content-Type: image/jpeg\r\n\r\n";
+    http->Write(f_header.c_str(), f_header.size());
+
+    http->Write(jpeg_data.c_str(), jpeg_data.size());
+
+    std::string footer = "\r\n--" + boundary + "--\r\n";
+    http->Write(footer.c_str(), footer.size());
+    http->Write("", 0);
+
+    if (http->GetStatusCode() != 200) {
+        throw std::runtime_error(std::string("Vision server error, status: ") + std::to_string(http->GetStatusCode()));
+    }
+
+    std::string result = http->ReadAll();
+    http->Close();
+
+    ESP_LOGI(TAG, "HA camera describe result: %s", result.c_str());
     return result;
 }
