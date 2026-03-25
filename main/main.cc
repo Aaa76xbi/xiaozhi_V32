@@ -140,8 +140,8 @@ bool perform_login() {
 // ===================== [修正后的消息处理逻辑：支持 Unicode 转义] =====================
 
 void handle_ws_message(const char *payload) {
-    // 打印消息方便调试
-    ESP_LOGI(TAG, "📩 [原始消息] %s", payload);
+    // 仅打印前80字节，避免 base64 图片数据刷屏
+    ESP_LOGI(TAG, "📩 [消息] %.80s%s", payload, strlen(payload) > 80 ? "..." : "");
 
     // 1. 处理心跳
     cJSON *root = cJSON_Parse(payload);
@@ -308,8 +308,6 @@ extern "C" void app_main(void)
     // 启动主程序
     Application::GetInstance().Start();
 
-    // 启动传感器监控任务
-    // xTaskCreate(sensor_monitor_task, "sensor_task", 8192, NULL, 5, NULL);
-    // main/main.cc
-    xTaskCreate(sensor_monitor_task, "sensor_task", 10240, NULL, 2, NULL);
+    // 传感器监控任务已禁用（WebSocket 消息会干扰 AI 对话）
+    // xTaskCreate(sensor_monitor_task, "sensor_task", 10240, NULL, 2, NULL);
 }

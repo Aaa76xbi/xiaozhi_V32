@@ -13,18 +13,35 @@
 #define ENTITY_WATER_VALVE "switch.zhi_neng_shui_fa_switch_1"
 
 // =================【配置 B：新设备 (本地 HA)】=================
-#define HA_NEW_URL   "http://192.168.0.12:8123/api"
+// #define HA_NEW_URL   "http://192.168.0.12:8123/api"
+#define HA_NEW_URL   "http://192.168.1.104:8123/api"
 #define HA_NEW_TOKEN "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlMjhhZTU4ZjFjZmE0ZGI5YjNiNTM0NmM4MzZmMjIyYiIsImlhdCI6MTc3MDI5NTY5OSwiZXhwIjoyMDg1NjU1Njk5fQ.8AkqWHvGNxOfH1BsN0JrNcVBX-d1SMS6tY5wBQuIkTM"
 
 #define ENTITY_SMART_PLUG  "switch.zhi_neng_cha_zuo_socket_1"
 #define ENTITY_DOOR_SENSOR "binary_sensor.isa_dw2hl_2dde_contact_state"
 
+// 窗帘
+#define ENTITY_CURTAIN_1   "cover.giot_v5icm_e44c_curtain"
+#define ENTITY_CURTAIN_2   "cover.giot_v5icm_ddc4_curtain"
+// 小米音箱
+#define ENTITY_SPEAKER     "media_player.xiaomi_l05b_030f_play_control"
+#define ENTITY_SPEAKER_TTS "text.xiaomi_l05b_030f_play_text"
+#define ENTITY_SPEAKER_CMD "text.xiaomi_l05b_030f_execute_text_directive"
+
 // =================【配置 C：TP-Link 摄像头（客厅）】=================
-#define HA_CAMERA_URL    "http://192.168.3.252:8123"
+#define HA_CAMERA_URL    "http://192.168.1.104:8123"
 #define HA_CAMERA_TOKEN  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjM2ZiNzlhNjJmMGE0ZTA1YjViNzFmZDNjZjM2ZjRiYiIsImlhdCI6MTc3MzgzNjQ3NCwiZXhwIjoyMDg5MTk2NDc0fQ.Euaz_kC1FTB_UMq4g7hBCuMMMF5cNb1DdDScAMyRaiM"
 #define HA_CAMERA_ENTITY "camera.ke_ting_she_xiang_tou_mainstream"
-#define HA_CAMERA_PTZ_URL HA_CAMERA_URL "/api/services/onvif/ptz"
-#define HA_CAMERA_PROXY_URL HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY
+#define HA_CAMERA_PTZ_URL         HA_CAMERA_URL "/api/services/onvif/ptz"
+// AI描述用：800px宽，HA服务端缩放，下载快（约50KB）且AI分析细节足够
+#define HA_CAMERA_PROXY_URL       HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY "?width=1000"
+// 显示用缩图（480px宽，HA服务端缩放）：解码后约230KB，适合240×240圆屏
+#define HA_CAMERA_PROXY_SMALL_URL HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY "?width=600"
+// Person Detection 传感器（有人在画面时为 on）
+#define HA_CAMERA_MOTION_URL     HA_CAMERA_URL "/api/states/binary_sensor.ke_ting_she_xiang_tou_person_detection"
+// 有人时每 10 秒分析一次；跌倒报警后冷却 120 秒再重新报警
+#define FALL_DETECT_POLL_SEC     10
+#define FALL_DETECT_COOLDOWN_SEC 120
 
 // =================【配置 D：老人监控平台】=================
 #define MONITOR_LOGIN_URL "https://papi.11yzh.com/api/rest/data/login"
@@ -35,12 +52,11 @@
 // 由 McpServer::ParseCapabilities 调用，保存 AI 视觉服务器地址
 void SetVisionUrl(const std::string& url, const std::string& token);
 
-// AI 说完话后启动报警倒计时（在 tts state=stop 时调用）
-void StartAlarmCountdown();
-// STT 检测到紧急词时直接就绪报警（不依赖 AI 调用 trigger_alarm）
-void ArmAlarm();
-// STT 检测到取消词时直接取消报警（不依赖 AI 调用 cancel_alarm）
-void CancelAlarm();
+// 启动后台跌倒检测监控任务（在 RegisterHomeDeviceTools 内自动调用）
+void StartFallDetectionMonitor();
+// 启动门磁监控后台任务（在 RegisterHomeDeviceTools 内自动调用）
+void StartDoorMonitor();
+
 
 class MyHomeDevice {
 public:

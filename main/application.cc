@@ -442,16 +442,11 @@ void Application::Start() {
             ESP_LOGW(TAG, "Server sample rate %d does not match device output sample rate %d, resampling may cause distortion",
                 protocol_->server_sample_rate(), codec->output_sample_rate());
         }
-        // 若因紧急传感器事件（如开门）而建连，建连后发送事件并进入 Listening 以接收 AI 提醒 TTS
-        if (!pending_sensor_event_.empty()) {
-            protocol_->SendSensorEvent(pending_sensor_event_);
-            pending_sensor_event_.clear();
-            SetDeviceState(kDeviceStateListening);
-        }
     });
     protocol_->OnAudioChannelClosed([this, &board]() {
         board.SetPowerSaveMode(true);
         Schedule([this]() {
+            if (protocol_->IsAudioChannelOpened()) return;
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
             SetDeviceState(kDeviceStateIdle);
@@ -471,8 +466,6 @@ void Application::Start() {
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
                 Schedule([this]() {
-                    // AI 说完一轮话，若 trigger_alarm 已就绪则开始6秒倒计时
-                    StartAlarmCountdown();
                     if (device_state_ == kDeviceStateSpeaking) {
                         if (listening_mode_ == kListeningModeManualStop) {
                             SetDeviceState(kDeviceStateIdle);
@@ -496,20 +489,6 @@ void Application::Start() {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
                 Schedule([this, display, message = std::string(text->valuestring)]() {
                     display->SetChatMessage("user", message.c_str());
-                    // 检测紧急求救词，直接就绪报警，不依赖 AI 调用 trigger_alarm
-                    if (message.find("救命") != std::string::npos ||
-                        message.find("求救") != std::string::npos ||
-                        message.find("呼救") != std::string::npos ||
-                        message.find("救救我") != std::string::npos) {
-                        ArmAlarm();
-                    }
-                    // 检测取消词，直接取消报警，不依赖 AI 调用 cancel_alarm
-                    if (message.find("取消") != std::string::npos ||
-                        message.find("不需要") != std::string::npos ||
-                        message.find("没事") != std::string::npos ||
-                        message.find("不报警") != std::string::npos) {
-                        CancelAlarm();
-                    }
                 });
             }
         } else if (strcmp(type->valuestring, "llm") == 0) {
@@ -716,22 +695,6 @@ void Application::AbortSpeaking(AbortReason reason) {
     }
 }
 
-void Application::TriggerUrgentSensorAlert(const std::string& content) {
-    if (content.empty()) return;
-    Schedule([this, content]() {
-        if (!protocol_) return;
-        if (device_state_ == kDeviceStateSpeaking) {
-            AbortSpeaking(kAbortReasonUrgentAlert);
-        }
-        if (protocol_->IsAudioChannelOpened()) {
-            protocol_->SendSensorEvent(content);
-        } else {
-            pending_sensor_event_ = content;
-            SetDeviceState(kDeviceStateConnecting);
-            protocol_->OpenAudioChannel();
-        }
-    });
-}
 
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;

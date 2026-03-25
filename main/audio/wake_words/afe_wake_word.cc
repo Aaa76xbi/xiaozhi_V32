@@ -83,8 +83,8 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
 
     // 提高唤醒词检测阈值，减少误唤醒（范围 0.4~0.9999，默认约 0.5，值越高越严格）
     if (afe_iface_->set_wakenet_threshold) {
-        int ret = afe_iface_->set_wakenet_threshold(afe_data_, 1, 0.9f);
-        ESP_LOGI(TAG, "Set wakenet threshold to 0.9, ret=%d", ret);
+        int ret = afe_iface_->set_wakenet_threshold(afe_data_, 1, 0.9999f);
+        ESP_LOGI(TAG, "Set wakenet threshold to 0.9999, ret=%d", ret);
     }
 
     xTaskCreate([](void* arg) {

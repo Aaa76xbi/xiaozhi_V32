@@ -228,6 +228,7 @@ void Ws2812ControllerMCP::StopEffectTask() {
 void Ws2812ControllerMCP::RegisterMcpTools() {
     auto& mcp_server = McpServer::GetInstance();
 
+    /* ---- 已注释：减少工具数量，保留 on/off/set_color 三个即可 ----
     mcp_server.AddTool(
         "self.ws2812.breathing",
         "开启呼吸灯灯效",
@@ -470,9 +471,11 @@ void Ws2812ControllerMCP::RegisterMcpTools() {
             return true;
         });
 
+    ---- 注释结束 ---- */
+
     mcp_server.AddTool(
         "self.ws2812.set_color",
-        "设置颜色",
+        "设置灯带颜色，r/g/b 各0~255",
         PropertyList({Property("r", kPropertyTypeInteger, 0, 0, 255),
                       Property("g", kPropertyTypeInteger, 255, 0, 255),
                       Property("b", kPropertyTypeInteger, 0, 0, 255)}),
@@ -485,13 +488,15 @@ void Ws2812ControllerMCP::RegisterMcpTools() {
 
 
 
-    // 获取当前灯效是否启用
+    /* ---- 已注释：status/nightlight/scroll/blink ----
     mcp_server.AddTool("self.ws2812.status",
                        "当查询当前灯带或灯效是否打开时，返回灯带或灯效当前的状态（true=打开，false=关闭）",
                        PropertyList(),
                        [this](const PropertyList& properties) -> ReturnValue {
                            return enabled_;
                        });
+
+    ---- 注释结束 ---- */
 
     // 添加一个 MCP 工具以允许恢复自动响应（启用灯效）
     mcp_server.AddTool(
@@ -515,7 +520,7 @@ void Ws2812ControllerMCP::RegisterMcpTools() {
             TurnOff(true);
             return true;
         });
-    // 手动开启小夜灯（锁定其他灯效）
+    /* ---- 已注释：nightlight/scroll/blink ----
     mcp_server.AddTool(
         "self.ws2812.nightlight_on",
         "手动开启小夜灯，锁定其他灯效直到手动关闭",
@@ -603,6 +608,8 @@ void Ws2812ControllerMCP::RegisterMcpTools() {
                 StartEffectTask();
             return true;
         });
+
+    ---- 注释结束 ---- */
 
     audio_led_meter_enable(0);
 }

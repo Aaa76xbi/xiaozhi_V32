@@ -812,7 +812,7 @@ void LcdDisplay::SetupUI() {
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
 
     preview_image_ = lv_image_create(content_);
-    lv_obj_set_size(preview_image_, width_ / 2, height_ / 2);
+    lv_obj_set_size(preview_image_, width_, height_);
     lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
 
@@ -890,8 +890,16 @@ void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     // 设置图片源并显示预览图片
     lv_image_set_src(preview_image_, img_dsc);
     if (img_dsc->header.w > 0 && img_dsc->header.h > 0) {
-        // zoom factor 0.5
-        lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
+        // Cover：取宽高中较大的缩放比，铺满整个屏幕，超出部分被裁切
+        int scale_w = 256 * width_  / (int)img_dsc->header.w;
+        int scale_h = 256 * height_ / (int)img_dsc->header.h;
+        int scale   = (scale_w > scale_h) ? scale_w : scale_h;
+        lv_image_set_scale(preview_image_, scale);
+        // 居中偏移，让裁切均匀分布在四周
+        int scaled_w = (int)img_dsc->header.w * scale / 256;
+        int scaled_h = (int)img_dsc->header.h * scale / 256;
+        lv_image_set_offset_x(preview_image_, -(scaled_w - width_)  / 2);
+        lv_image_set_offset_y(preview_image_, -(scaled_h - height_) / 2);
     }
 
     // Hide emoji_box_
