@@ -632,6 +632,40 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
             }
         });
 
+    // ===================== 紧急求救（拨打救援电话）=====================
+    server.AddTool(
+        "call_emergency",
+        "【紧急工具】当用户说'救命''救救我''帮我报警''打120''我需要帮助'等求救词，且用户已确认需要求救时，立即调用此工具拨打救援电话。",
+        PropertyList(std::vector<Property>{}),
+        [](const PropertyList&) -> ReturnValue {
+            const char* url  = "https://admin.11yzh.com/api/hotline/openarchives";
+            const char* body = "{\"eps400\":\"4000000126\",\"caller\":\"19808555455\"}";
+
+            esp_http_client_config_t cfg = {};
+            cfg.url                     = url;
+            cfg.method                  = HTTP_METHOD_POST;
+            cfg.timeout_ms              = 10000;
+            cfg.crt_bundle_attach       = esp_crt_bundle_attach;
+            cfg.skip_cert_common_name_check = true;
+
+            auto client = esp_http_client_init(&cfg);
+            esp_http_client_set_header(client, "Content-Type", "application/json");
+            esp_http_client_set_header(client, "Accept", "*/*");
+            esp_http_client_set_post_field(client, body, (int)strlen(body));
+
+            esp_err_t err  = esp_http_client_perform(client);
+            int       status = esp_http_client_get_status_code(client);
+            esp_http_client_cleanup(client);
+
+            if (err == ESP_OK && (status == 200 || status == 201)) {
+                ESP_LOGI(TAG, "Emergency call sent ok");
+                return std::string("求救电话已成功拨出，救援正在赶来，请保持冷静");
+            } else {
+                ESP_LOGE(TAG, "Emergency call failed: err=%d status=%d", err, status);
+                return std::string("求救电话拨打失败，请立即手动拨打120");
+            }
+        });
+
     // ===================== 睡眠模式：一键关闭所有设备 =====================
     server.AddTool(
         "sleep_mode",
