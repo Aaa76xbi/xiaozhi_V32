@@ -668,18 +668,44 @@ void Application::OnWakeWordDetected() {
             return;
         }
 
-#if CONFIG_SEND_WAKE_WORD_DATA
-        // 正常唤醒词：发送唤醒音频给服务器
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            protocol_->SendAudio(std::move(packet));
-        }
-        protocol_->SendWakeWordDetected(wake_word);
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-#else
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-        // Play the pop up sound to indicate the wake word is detected
-        audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
-#endif
+        // [原唤醒流程，已注释] 发唤醒音频给服务器，AI 生成问候语后进入监听
+        // #if CONFIG_SEND_WAKE_WORD_DATA
+        //     while (auto packet = audio_service_.PopWakeWordPacket()) {
+        //         protocol_->SendAudio(std::move(packet));
+        //     }
+        //     protocol_->SendWakeWordDetected(wake_word);
+        //     SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        // #else
+        //     SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        //     audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+        // #endif
+
+        // 随机播放本地回应音效（直接推包，不进入 listening 状态，避免麦克风把音效误识别为用户语音）
+        audio_service_.PlaySound(
+            (esp_timer_get_time() & 1) ? Lang::Sounds::OGG_I_AM_IN : Lang::Sounds::OGG_IM_HERE
+        );
+        // 预打包 listening callback（在此成员函数内可访问私有方法 SetListeningMode）
+        struct ListenArg {
+            Application*  app;
+            AudioService* audio;
+            std::function<void()> cb;
+        };
+        auto* larg = new ListenArg{
+            this, &audio_service_,
+            [this]() {
+                SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+            }
+        };
+        // 后台任务：等 OGG 播完（IsIdle）再开麦
+        xTaskCreate([](void* p) {
+            auto* a = static_cast<ListenArg*>(p);
+            for (int i = 0; i < 60 && !a->audio->IsIdle(); i++) {
+                vTaskDelay(pdMS_TO_TICKS(50));
+            }
+            a->app->Schedule(std::move(a->cb));
+            delete a;
+            vTaskDelete(nullptr);
+        }, "wake_listen", 2048, larg, 1, nullptr);
     } else if (device_state_ == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (device_state_ == kDeviceStateActivating) {

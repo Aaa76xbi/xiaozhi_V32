@@ -203,7 +203,7 @@ static void ReminderTask(void*) {
             ESP_LOGI(TAG, "Reminder fired: %s", msg.c_str());
             auto& audio = Application::GetInstance().GetAudioService();
             for (int i = 0; i < 3; i++) {
-                audio.PlaySound(Lang::Sounds::OGG_VIBRATION);
+                audio.PlaySound(Lang::Sounds::OGG_MORNING_ALARM);
                 vTaskDelay(pdMS_TO_TICKS(1200));
             }
         }
