@@ -14,7 +14,7 @@
 
 // =================【配置 B：新设备 (本地 HA)】=================
 // #define HA_NEW_URL   "http://192.168.0.12:8123/api"
-#define HA_NEW_URL   "http://192.168.1.104:8123/api"
+#define HA_NEW_URL   "http://192.168.1.105:8123/api"
 #define HA_NEW_TOKEN "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlMjhhZTU4ZjFjZmE0ZGI5YjNiNTM0NmM4MzZmMjIyYiIsImlhdCI6MTc3MDI5NTY5OSwiZXhwIjoyMDg1NjU1Njk5fQ.8AkqWHvGNxOfH1BsN0JrNcVBX-d1SMS6tY5wBQuIkTM"
 
 #define ENTITY_SMART_PLUG  "switch.zhi_neng_cha_zuo_socket_1"
@@ -29,7 +29,7 @@
 #define ENTITY_SPEAKER_CMD "text.xiaomi_l05b_030f_execute_text_directive"
 
 // =================【配置 C：TP-Link 摄像头（客厅）】=================
-#define HA_CAMERA_URL    "http://192.168.1.104:8123"
+#define HA_CAMERA_URL    "http://192.168.1.105:8123"
 #define HA_CAMERA_TOKEN  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjM2ZiNzlhNjJmMGE0ZTA1YjViNzFmZDNjZjM2ZjRiYiIsImlhdCI6MTc3MzgzNjQ3NCwiZXhwIjoyMDg5MTk2NDc0fQ.Euaz_kC1FTB_UMq4g7hBCuMMMF5cNb1DdDScAMyRaiM"
 #define HA_CAMERA_ENTITY "camera.ke_ting_she_xiang_tou_mainstream"
 #define HA_CAMERA_PTZ_URL         HA_CAMERA_URL "/api/services/onvif/ptz"
@@ -56,6 +56,16 @@ void SetVisionUrl(const std::string& url, const std::string& token);
 void StartFallDetectionMonitor();
 // 启动门磁监控后台任务（在 RegisterHomeDeviceTools 内自动调用）
 void StartDoorMonitor();
+
+// 闹钟状态查询与关闭（供 Board 按键回调调用）
+bool IsAlarmRinging();
+void DismissAlarm();
+
+// 总台语音通话（供 Board 按键回调调用）
+bool IsStationCallActive();
+void StationCallConnect();
+void StationCallStartRecord();
+void StationCallStopRecord();
 
 
 class MyHomeDevice {

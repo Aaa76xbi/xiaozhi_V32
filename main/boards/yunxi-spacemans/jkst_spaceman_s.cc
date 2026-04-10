@@ -26,6 +26,7 @@
 
 
 #include "ws2812_controller_mcp.h"
+#include "my_home_device.h"
 // #include "wallpaper/wallpaper_downloader.h"
 
 #include <wifi_station.h>
@@ -92,6 +93,7 @@ private:
  
     Button boot_button_;
     Button touch_button_;
+    bool boot_long_press_fired_ = false;  // 区分短按与长按，防止长按触发 AI 切换
 
     LcdDisplay* display_;
     // Esp32Camera *camera_;
@@ -266,21 +268,60 @@ private:
     }
 
     void InitializeButtons() {
-        boot_button_.OnClick([this]() {
+        // boot_button：
+        //   正常模式短按  → 切换 AI 对话（OnPressUp + 长按标志位，比 OnClick/SINGLE_CLICK 更可靠）
+        //   正常模式长按3s → 进入总台通话模式
+        //   通话模式按下   → 开始录音
+        //   通话模式松开   → 停止录音并发送
+        boot_button_.OnPressDown([this]() {
+            boot_long_press_fired_ = false;   // 每次按下先清标志
+            if (IsStationCallActive()) {
+                StationCallStartRecord();
+            }
+        });
+
+        boot_button_.OnLongPress([this]() {
+            boot_long_press_fired_ = true;    // 标记本次为长按，OnPressUp 不再切换 AI
+            if (!IsStationCallActive()) {
+                StationCallConnect();
+            }
+        });
+
+        boot_button_.OnPressUp([this]() {
+            if (IsStationCallActive()) {      // 通话模式：松开停止录音
+                StationCallStopRecord();
+                return;
+            }
+            if (boot_long_press_fired_) {     // 长按已处理，松开时不切换 AI
+                boot_long_press_fired_ = false;
+                return;
+            }
+            // 短按：切换 AI 对话（打断说话 / 唤醒 / 停止监听）
+            if (IsAlarmRinging()) {
+                DismissAlarm();
+                return;
+            }
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                ResetWifiConfiguration();
+                return;
+            }
+            app.ToggleChatState();
+        });
+
+        // touch_button：始终负责 AI 对话切换，不受通话模式影响
+        // boot_button_ 在通话模式下单击被屏蔽，所以 AI 切换移到这里
+        touch_button_.OnClick([this]() {
+            if (IsAlarmRinging()) {
+                DismissAlarm();
+                return;
+            }
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
             }
             app.ToggleChatState();
         });
-        touch_button_.OnClick([this]()
-                              {
-                                    auto& app = Application::GetInstance();
-                                    if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                                        ResetWifiConfiguration();
-                                    }
-                                    app.ToggleChatState();
-                                });
     }
 
     // 物联网初始化，添加对 AI 可见设备
@@ -336,7 +377,7 @@ private:
     // }
 
 public:
-    YUNXI_SPACEMANS() : boot_button_(BOOT_BUTTON_GPIO),
+    YUNXI_SPACEMANS() : boot_button_(BOOT_BUTTON_GPIO, false, 3000),
                        touch_button_(TOUCH_BUTTON_GPIO)
     {
         InitializePowerManager();

@@ -21,6 +21,9 @@
 #include "display/lvgl_display/lvgl_display.h"
 #include "display/lvgl_display/lvgl_image.h"
 #include "assets/lang_config.h"
+#include <esp_websocket_client.h>
+#include <mbedtls/base64.h>
+#include <opus_encoder.h>
 
 #define TAG "HomeDevice"
 
@@ -142,7 +145,7 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
 // 通用：POST 到本地 HA，body 为自定义 JSON 字符串
 static void CallLocalHaService(const char* domain, const char* service, const std::string& body_json) {
     char url[256];
-    snprintf(url, sizeof(url), "http://192.168.1.104:8123/api/services/%s/%s", domain, service);
+    snprintf(url, sizeof(url), "http://192.168.1.105:8123/api/services/%s/%s", domain, service);
 
     esp_http_client_config_t cfg = {};
     cfg.url        = url;
@@ -165,10 +168,530 @@ static void CallLocalHaService(const char* domain, const char* service, const st
 }
 
 // =================================================================================
+// Part 1.6: 总台语音通话（对讲机模式）
+// =================================================================================
+
+// ---------- 服务器配置 ----------
+#define STATION_SERVER      "http://8.217.168.200:8000"
+#define STATION_WS_URL      "ws://8.217.168.200:8000/device/2189666?token=xiaozhi2025"
+#define STATION_TOKEN       "xiaozhi2025"
+#define STATION_ROOM_ID     "2189666"
+#define STATION_ROOM_NAME   "小智设备01"
+#define STATION_SAMPLE_RATE 16000
+#define STATION_MAX_SEC     60   // 最长录音时间（秒）
+
+// ---------- 状态机 ----------
+enum class StationCallState { kIdle, kReady, kRecording, kSending, kWaitingReply };
+static std::atomic<StationCallState> s_sc_state{StationCallState::kIdle};
+static std::mutex                   s_sc_mutex;
+static std::vector<int16_t>         s_sc_pcm;
+static esp_websocket_client_handle_t s_sc_ws = nullptr;
+static TaskHandle_t                  s_sc_record_task = nullptr;
+static std::atomic<int64_t>          s_sc_record_start_us{0};
+
+// ScSendTask 用 PSRAM 栈（CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y）
+// 避免从内部 SRAM 分配大连续块导致失败
+static StackType_t*  s_sc_send_stack = nullptr;   // 首次用时从 PSRAM 分配
+static StaticTask_t  s_sc_send_tcb;               // TCB 放内部 SRAM 即可
+static std::atomic<bool> s_sc_sending{false};     // 防止并发发送
+
+// ---------- 留言队列（最多保留5条）----------
+struct ScReply { std::string msg_id; std::string url; };
+static std::mutex            s_sc_reply_mutex;
+static std::vector<ScReply>  s_sc_replies;    // 待播放的回复（msg_id + url）
+
+// 更新屏幕上的留言计数（必须在主线程 / Schedule 内调用）
+static void ScUpdateReplyBadge() {
+    auto* display = Board::GetInstance().GetDisplay();
+    if (!display) return;
+    size_t unread;
+    {
+        std::lock_guard<std::mutex> lk(s_sc_reply_mutex);
+        unread = s_sc_replies.size();
+    }
+    if (unread == 0) {
+        display->SetChatMessage("system", "📞 总台通话就绪\n按住按键说话，松开发送");
+    } else {
+        std::string msg = "📩 收到总台 " + std::to_string(unread) + " 条留言\n说「播放留言」收听";
+        display->SetChatMessage("system", msg.c_str());
+    }
+}
+
+bool IsStationCallActive() {
+    return s_sc_state.load() != StationCallState::kIdle;
+}
+
+// ---------- 工具函数 ----------
+static void ScShowStatus(const char* text) {
+    Application::GetInstance().Schedule([t = std::string(text)]() {
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display) display->ShowNotification(t.c_str(), 4000);
+    });
+}
+
+// OGG/Opus 容器构建工具
+// OGG CRC32（多项式 0x04C11DB7，无反射，初值 0）
+static uint32_t OggCrc32(const uint8_t* data, size_t len) {
+    uint32_t crc = 0;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= (uint32_t)data[i] << 24;
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x80000000u) ? (crc << 1) ^ 0x04C11DB7u : crc << 1;
+    }
+    return crc;
+}
+
+// 向 ogg 缓冲区追加一个 OGG 页面（自动计算并填充 CRC）
+static void OggAppendPage(std::vector<uint8_t>& ogg, uint8_t header_type,
+                           uint64_t granule_pos, uint32_t serial, uint32_t& seq_no,
+                           const uint8_t* payload, size_t payload_len) {
+    std::vector<uint8_t> segs;
+    size_t rem = payload_len;
+    while (rem >= 255) { segs.push_back(255); rem -= 255; }
+    segs.push_back((uint8_t)rem);
+
+    size_t hdr_len   = 27 + segs.size();
+    size_t page_start = ogg.size();
+    ogg.resize(page_start + hdr_len + payload_len);
+    uint8_t* p = ogg.data() + page_start;
+
+    memcpy(p, "OggS", 4);
+    p[4] = 0; p[5] = header_type;
+    for (int i = 0; i < 8; i++) p[6+i]  = (granule_pos >> (i*8)) & 0xFF;
+    for (int i = 0; i < 4; i++) p[14+i] = (serial     >> (i*8)) & 0xFF;
+    for (int i = 0; i < 4; i++) p[18+i] = (seq_no     >> (i*8)) & 0xFF;
+    seq_no++;
+    memset(p+22, 0, 4);                       // CRC 占位
+    p[26] = (uint8_t)segs.size();
+    memcpy(p+27, segs.data(), segs.size());
+    memcpy(p + hdr_len, payload, payload_len);
+
+    uint32_t crc = OggCrc32(p, hdr_len + payload_len);
+    p[22] = crc & 0xFF; p[23] = (crc>>8) & 0xFF;
+    p[24] = (crc>>16) & 0xFF; p[25] = (crc>>24) & 0xFF;
+}
+
+// 将 Opus 包列表封装为合法的 OGG/Opus 字节流
+static std::vector<uint8_t> BuildOgg(const std::vector<std::vector<uint8_t>>& pkts, int sample_rate) {
+    const uint32_t serial = 0x12345678;
+    uint32_t seq_no = 0;
+    std::vector<uint8_t> ogg;
+    ogg.reserve(512 + pkts.size() * 300);
+
+    // Page 0: OpusHead
+    const uint16_t pre_skip = 312;
+    uint8_t head[19] = {
+        'O','p','u','s','H','e','a','d', 1, 1,
+        (uint8_t)(pre_skip & 0xFF), (uint8_t)(pre_skip >> 8),
+        (uint8_t)(sample_rate & 0xFF), (uint8_t)((sample_rate>>8) & 0xFF),
+        (uint8_t)((sample_rate>>16) & 0xFF), (uint8_t)((sample_rate>>24) & 0xFF),
+        0, 0, 0
+    };
+    OggAppendPage(ogg, 0x02, 0, serial, seq_no, head, sizeof(head));
+
+    // Page 1: OpusTags
+    const char* vendor = "ESP32SC";
+    std::vector<uint8_t> tags = {'O','p','u','s','T','a','g','s',
+        7,0,0,0, 'E','S','P','3','2','S','C', 0,0,0,0};
+    OggAppendPage(ogg, 0x00, 0, serial, seq_no, tags.data(), tags.size());
+
+    // Pages 2+: 每包一页，granule_pos 用 48kHz 单位（60ms 帧 = 2880 采样）
+    const uint32_t spf48 = 2880;
+    uint64_t granule = pre_skip;
+    for (size_t i = 0; i < pkts.size(); i++) {
+        granule += spf48;
+        uint8_t htype = (i == pkts.size()-1) ? 0x04 : 0x00;
+        OggAppendPage(ogg, htype, granule, serial, seq_no, pkts[i].data(), pkts[i].size());
+    }
+    return ogg;
+}
+
+// 下载 URL 音频字节并通过 AudioService 播放；播放后通过 WS 发送已读回执
+static void ScDownloadAndPlay(const std::string& msg_id, const std::string& url) {
+    std::string audio_data;
+    esp_http_client_config_t cfg = {};
+    cfg.url         = url.c_str();
+    cfg.method      = HTTP_METHOD_GET;
+    cfg.timeout_ms  = 15000;
+    cfg.buffer_size = 4096;
+    cfg.event_handler = [](esp_http_client_event_t* e) -> esp_err_t {
+        if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data)
+            ((std::string*)e->user_data)->append((const char*)e->data, e->data_len);
+        return ESP_OK;
+    };
+    cfg.user_data = &audio_data;
+
+    auto client = esp_http_client_init(&cfg);
+    esp_err_t err = esp_http_client_perform(client);
+    int status    = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status != 200 || audio_data.empty()) {
+        ESP_LOGE(TAG, "ScDownloadAndPlay: download failed err=%d status=%d", err, status);
+        Application::GetInstance().Schedule([]() {
+            auto* display = Board::GetInstance().GetDisplay();
+            if (display) display->ShowNotification("❌ 留言下载失败", 3000);
+        });
+        return;
+    }
+    ESP_LOGI(TAG, "ScDownloadAndPlay: downloaded %d bytes, playing...", (int)audio_data.size());
+    // 验证 OGG 格式魔数；若不以 "OggS" 开头则 PlaySound 会静默失败
+    if (audio_data.size() < 4 ||
+        !(audio_data[0]=='O' && audio_data[1]=='g' && audio_data[2]=='g' && audio_data[3]=='S')) {
+        ESP_LOGE(TAG, "ScDownloadAndPlay: not OGG format! header=%02X %02X %02X %02X",
+                 (uint8_t)audio_data[0], (uint8_t)audio_data[1],
+                 (uint8_t)audio_data[2], (uint8_t)audio_data[3]);
+        Application::GetInstance().Schedule([]() {
+            auto* display = Board::GetInstance().GetDisplay();
+            if (display) display->ShowNotification("❌ 音频格式错误(非OGG)", 3000);
+        });
+        return;
+    }
+    // 在主线程排队播放
+    Application::GetInstance().Schedule([audio_data]() {
+        auto& audio = Application::GetInstance().GetAudioService();
+        audio.PlaySound(std::string_view(audio_data.data(), audio_data.size()));
+    });
+    // 发送已读回执（音频已排队，稍后即播放）
+    if (!msg_id.empty() && s_sc_ws &&
+        esp_websocket_client_is_connected(s_sc_ws)) {
+        std::string read_msg = "{\"type\":\"read\",\"msg_id\":\"" + msg_id + "\"}";
+        esp_websocket_client_send_text(s_sc_ws, read_msg.c_str(),
+                                       (int)read_msg.size(), pdMS_TO_TICKS(1000));
+        ESP_LOGI(TAG, "ScDownloadAndPlay: sent read receipt for %s", msg_id.c_str());
+    }
+}
+
+// Base64 编码
+static std::string ScBase64Encode(const uint8_t* data, size_t len) {
+    size_t out_len = 0;
+    mbedtls_base64_encode(nullptr, 0, &out_len, data, len);
+    std::string out(out_len, '\0');
+    mbedtls_base64_encode((unsigned char*)out.data(), out_len, &out_len, data, len);
+    out.resize(out_len);
+    return out;
+}
+
+// HTTP 上传音频（OGG/Opus 格式，相比 WAV 节省约 8 倍带宽）
+static bool ScUploadAudio(const std::vector<int16_t>& pcm) {
+    if (pcm.empty()) return false;
+
+    // 编码 PCM → Opus packets（960 采样/帧 = 16kHz × 60ms）
+    const int frame_size = STATION_SAMPLE_RATE * 60 / 1000; // 960
+    OpusEncoderWrapper encoder(STATION_SAMPLE_RATE, 1, 60);
+    // ScSendTask 运行在 32KB PSRAM 栈上，可以承受更高 complexity
+    // complexity=5 比 complexity=0 音质显著提升，栈消耗约增加 4KB，在 32KB 内安全
+    encoder.SetComplexity(5);
+
+    std::vector<std::vector<uint8_t>> pkts;
+    for (size_t off = 0; off + (size_t)frame_size <= pcm.size(); off += frame_size) {
+        std::vector<int16_t> frame(pcm.begin() + off, pcm.begin() + off + frame_size);
+        std::vector<uint8_t> opus_pkt;
+        if (encoder.Encode(std::move(frame), opus_pkt) && !opus_pkt.empty()) {
+            pkts.push_back(std::move(opus_pkt));
+        }
+    }
+    if (pkts.empty()) return false;
+
+    auto ogg  = BuildOgg(pkts, STATION_SAMPLE_RATE);
+    float dur = (float)pcm.size() / STATION_SAMPLE_RATE;
+    ESP_LOGI(TAG, "ScUploadAudio: pcm=%d samples → OGG %d bytes (%.1fs)",
+             (int)pcm.size(), (int)ogg.size(), dur);
+
+    std::string b64 = ScBase64Encode(ogg.data(), ogg.size());
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "token",      STATION_TOKEN);
+    cJSON_AddStringToObject(root, "room_id",    STATION_ROOM_ID);
+    cJSON_AddStringToObject(root, "room_name",  STATION_ROOM_NAME);
+    cJSON_AddStringToObject(root, "audio_data", b64.c_str());
+    cJSON_AddNumberToObject(root, "duration",   (int)dur);
+    char* body = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+
+    std::string resp_buf;
+    esp_http_client_config_t cfg = {};
+    cfg.url           = STATION_SERVER "/api/voice/upload";
+    cfg.method        = HTTP_METHOD_POST;
+    cfg.timeout_ms    = 15000;
+    cfg.event_handler = [](esp_http_client_event_t* e) -> esp_err_t {
+        if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data)
+            ((std::string*)e->user_data)->append((const char*)e->data, e->data_len);
+        return ESP_OK;
+    };
+    cfg.user_data = &resp_buf;
+
+    auto client = esp_http_client_init(&cfg);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_post_field(client, body, strlen(body));
+    esp_err_t err = esp_http_client_perform(client);
+    int status    = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    free(body);
+
+    bool ok = (err == ESP_OK && status == 200);
+    ESP_LOGI(TAG, "ScUploadAudio: err=%d status=%d dur=%.1fs ok=%d", err, status, dur, ok);
+    return ok;
+}
+
+// 后台录音任务（循环调用 ReadAudioData 直到 state 不是 kRecording）
+static void ScRecordTask(void*) {
+    auto& audio  = Application::GetInstance().GetAudioService();
+    const int chunk = STATION_SAMPLE_RATE / 10; // 100ms per read
+    const int maxsamples = STATION_SAMPLE_RATE * STATION_MAX_SEC;
+    std::vector<int16_t> buf;
+    int last_display_sec = -1;
+
+    while (s_sc_state.load() == StationCallState::kRecording) {
+        if (audio.ReadAudioData(buf, STATION_SAMPLE_RATE, chunk)) {
+            std::lock_guard<std::mutex> lk(s_sc_mutex);
+            if ((int)(s_sc_pcm.size() + buf.size()) < maxsamples) {
+                s_sc_pcm.insert(s_sc_pcm.end(), buf.begin(), buf.end());
+            } else {
+                ESP_LOGW(TAG, "Station: max record length reached");
+                break;
+            }
+        }
+        // 每秒更新一次屏幕计时显示
+        int64_t elapsed_us = esp_timer_get_time() - s_sc_record_start_us.load();
+        int elapsed_sec = (int)(elapsed_us / 1000000);
+        if (elapsed_sec != last_display_sec) {
+            last_display_sec = elapsed_sec;
+            Application::GetInstance().Schedule([elapsed_sec]() {
+                auto* display = Board::GetInstance().GetDisplay();
+                if (display) {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "🔴 录音中... %02ds / %ds", elapsed_sec, STATION_MAX_SEC);
+                    display->ShowNotification(buf, 1500);
+                }
+            });
+        }
+    }
+    // 录音结束后恢复唤醒词检测（与 StationCallStartRecord 中的禁用对称）
+    Application::GetInstance().GetAudioService().EnableWakeWordDetection(true);
+    s_sc_record_task = nullptr;
+    vTaskDelete(nullptr);
+}
+
+// 上传任务（在后台执行，避免阻塞按键回调）
+static void ScSendTask(void*) {
+    std::vector<int16_t> pcm_copy;
+    {
+        std::lock_guard<std::mutex> lk(s_sc_mutex);
+        pcm_copy = s_sc_pcm;
+        s_sc_pcm.clear();
+    }
+
+    float dur = (float)pcm_copy.size() / STATION_SAMPLE_RATE;
+    ESP_LOGI(TAG, "Station: uploading %.1fs audio", dur);
+
+    if (dur < 0.5f) {
+        ScShowStatus("录音太短，已忽略");
+        s_sc_state = StationCallState::kReady;
+        s_sc_sending = false;
+        vTaskDelete(nullptr);
+        return;
+    }
+
+    ScShowStatus("📤 正在发送给总台...");
+    bool ok = ScUploadAudio(pcm_copy);
+
+    if (ok) {
+        s_sc_state = StationCallState::kReady;   // 保持 kReady，允许立即再次录音
+        ScShowStatus("✅ 留言已发送，可继续说话");
+    } else {
+        s_sc_state = StationCallState::kReady;
+        ScShowStatus("❌ 发送失败，请重试");
+    }
+    s_sc_sending = false;
+    vTaskDelete(nullptr);
+}
+
+// WebSocket 事件回调
+static void ScWsEventHandler(void*, esp_event_base_t, int32_t event_id, void* event_data) {
+    auto* d = (esp_websocket_event_data_t*)event_data;
+
+    if (event_id == WEBSOCKET_EVENT_CONNECTED) {
+        ESP_LOGI(TAG, "Station WS connected");
+        s_sc_state = StationCallState::kReady;
+        ScShowStatus("📞 总台已连接\n按住按键说话，松开发送");
+    } else if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
+        ESP_LOGW(TAG, "Station WS disconnected");
+        if (s_sc_state.load() != StationCallState::kIdle) {
+            ScShowStatus("📴 总台连接断开");
+            s_sc_state = StationCallState::kIdle;
+        }
+    } else if (event_id == WEBSOCKET_EVENT_DATA && d->op_code == 0x01 /* text frame */) {
+        // 解析总台回复
+        std::string raw((const char*)d->data_ptr, d->data_len);
+        cJSON* json = cJSON_Parse(raw.c_str());
+        if (!json) return;
+
+        const char* type = cJSON_GetStringValue(cJSON_GetObjectItem(json, "type"));
+        if (type) {
+            if (strcmp(type, "ping") == 0) {
+                // 心跳回应
+                esp_websocket_client_send_text(s_sc_ws, "pong", 4, pdMS_TO_TICKS(1000));
+            } else if (strcmp(type, "reply") == 0) {
+                const char* url_c    = cJSON_GetStringValue(cJSON_GetObjectItem(json, "audio_url"));
+                const char* msgid_c  = cJSON_GetStringValue(cJSON_GetObjectItem(json, "msg_id"));
+                std::string url    = url_c   ? url_c   : "";
+                std::string msg_id = msgid_c ? msgid_c : "";
+                ESP_LOGI(TAG, "Station: reply received, msg_id=%s", msg_id.c_str());
+                {
+                    std::lock_guard<std::mutex> lk(s_sc_reply_mutex);
+                    if (!url.empty()) {
+                        if (s_sc_replies.size() >= 5) s_sc_replies.erase(s_sc_replies.begin());
+                        s_sc_replies.push_back({msg_id, url});
+                    }
+                }
+                // 震动音 + 持久屏幕提示（不自动消失）
+                Application::GetInstance().Schedule([]() {
+                    auto& audio = Application::GetInstance().GetAudioService();
+                    audio.PlaySound(Lang::Sounds::OGG_VIBRATION);
+                    auto* display = Board::GetInstance().GetDisplay();
+                    if (display) {
+                        display->SetEmotion("happy");
+                        ScUpdateReplyBadge();
+                    }
+                });
+                s_sc_state = StationCallState::kReady;
+            }
+        }
+        cJSON_Delete(json);
+    }
+}
+
+// 连接 WS，进入通话模式
+void StationCallConnect() {
+    // 已经处于通话模式时，只刷新提示，不重建 WS（避免断开事件竞态导致状态变 kIdle）
+    if (s_sc_state.load() != StationCallState::kIdle) {
+        ESP_LOGI(TAG, "StationCallConnect: already active, refresh display only");
+        Application::GetInstance().Schedule([]() { ScUpdateReplyBadge(); });
+        return;
+    }
+    if (s_sc_ws) {
+        esp_websocket_client_stop(s_sc_ws);    // 先 stop 再 destroy，避免异步 DISCONNECT 覆盖新状态
+        esp_websocket_client_destroy(s_sc_ws);
+        s_sc_ws = nullptr;
+    }
+    esp_websocket_client_config_t ws_cfg = {};
+    ws_cfg.uri          = STATION_WS_URL;
+    ws_cfg.reconnect_timeout_ms = 5000;
+    ws_cfg.ping_interval_sec    = 30;
+    s_sc_ws = esp_websocket_client_init(&ws_cfg);
+    esp_websocket_register_events(s_sc_ws, WEBSOCKET_EVENT_ANY, ScWsEventHandler, nullptr);
+    esp_websocket_client_start(s_sc_ws);
+    s_sc_state = StationCallState::kReady;
+
+    // 屏幕反馈，通过 Schedule 投递到主线程
+    Application::GetInstance().Schedule([]() {
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetEmotion("thinking");
+            display->SetStatus("总台通话");
+            display->SetChatMessage("system", "📞 正在连接总台...\n连接后按住按键说话");
+        }
+    });
+}
+
+// 断开通话
+void StationCallDisconnect() {
+    s_sc_state = StationCallState::kIdle;
+    if (s_sc_ws) {
+        esp_websocket_client_stop(s_sc_ws);
+        esp_websocket_client_destroy(s_sc_ws);
+        s_sc_ws = nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lk(s_sc_reply_mutex);
+        s_sc_replies.clear();
+    }
+    Application::GetInstance().Schedule([]() {
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetStatus("待机");
+            display->SetEmotion("neutral");
+            display->SetChatMessage("system", "");
+        }
+    });
+}
+
+// 按键按下：开始录音（从按键回调调用，不可阻塞，不可直接操作 LVGL）
+void StationCallStartRecord() {
+    if (s_sc_state.load() != StationCallState::kReady) {
+        ESP_LOGW(TAG, "StationCallStartRecord: blocked, state=%d (0=idle,1=ready,2=rec,3=send,4=wait)",
+                 (int)s_sc_state.load());
+        return;
+    }
+    s_sc_state = StationCallState::kRecording;
+    {
+        std::lock_guard<std::mutex> lk(s_sc_mutex);
+        s_sc_pcm.clear();
+    }
+    // 禁用唤醒词检测：防止 AudioInputTask 与 ScRecordTask 争抢 I2S DMA 帧
+    // 若两个任务同时消费同一 DMA 缓冲区，ScRecordTask 只能录到约一半的帧，
+    // 导致播放速度偏快、音频失真。禁用后 AudioInputTask 阻塞，ScRecordTask 独占帧。
+    Application::GetInstance().GetAudioService().EnableWakeWordDetection(false);
+    // 显示操作必须投递到主线程，避免在按键回调中直接操作 LVGL 导致崩溃
+    // 同时停止 AI 监听，防止录音内容被 AI 误识别
+    Application::GetInstance().Schedule([]() {
+        auto& app = Application::GetInstance();
+        if (app.GetDeviceState() == kDeviceStateListening) {
+            app.StopListening();
+        }
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetEmotion("thinking");  // 使用存在的表情，"listening" 不在表情库中
+            display->ShowNotification("🔴 录音中...", 60000);
+        }
+    });
+    s_sc_record_start_us = esp_timer_get_time();
+    xTaskCreate(ScRecordTask, "sc_record", 4096, nullptr, 5, &s_sc_record_task);
+    ESP_LOGI(TAG, "Station: recording started");
+}
+
+// 按键松开：停止录音并发送（从按键回调调用，不可阻塞）
+void StationCallStopRecord() {
+    if (s_sc_state.load() != StationCallState::kRecording) return;
+    // 若上次发送还没结束（极端情况），直接忽略
+    if (s_sc_sending.exchange(true)) {
+        ESP_LOGW(TAG, "ScSendTask still running, skip");
+        return;
+    }
+    s_sc_state = StationCallState::kSending;
+    Application::GetInstance().Schedule([]() {
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display) display->SetEmotion("neutral");
+    });
+
+    // 首次使用时从 PSRAM 分配 32KB 栈（CONFIG_SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY=y）
+    // 避免从碎片化内部 SRAM 中申请大连续块失败
+    if (!s_sc_send_stack) {
+        s_sc_send_stack = (StackType_t*)heap_caps_malloc(
+            32768, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!s_sc_send_stack) {
+        ESP_LOGE(TAG, "ScSendTask: PSRAM alloc failed");
+        ScShowStatus("❌ 内存不足，发送失败");
+        s_sc_sending = false;
+        s_sc_state = StationCallState::kReady;
+        return;
+    }
+
+    xTaskCreateStaticPinnedToCore(ScSendTask, "sc_send", 32768,
+                                  nullptr, 3, s_sc_send_stack,
+                                  &s_sc_send_tcb, tskNO_AFFINITY);
+    ESP_LOGI(TAG, "Station: recording stopped, sending...");
+}
+
+// =================================================================================
 // Part 1.5: 提醒/闹钟
+// =================================================================================
 // =================================================================================
 
 struct Reminder {
+    int     id;           // 唯一编号，自增
     int64_t trigger_us;   // esp_timer_get_time() 到期时间（微秒）
     std::string message;
     bool fired;
@@ -176,10 +699,33 @@ struct Reminder {
 
 static std::mutex          s_reminder_mutex;
 static std::vector<Reminder> s_reminders;
+static int s_reminder_id_counter = 0;
+static std::atomic<bool> s_alarm_active{false};  // 当前是否有闹钟正在响
+
+bool IsAlarmRinging() { return s_alarm_active.load(); }
+void DismissAlarm()   { s_alarm_active = false; }
 
 static void ReminderTask(void*) {
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(5000));  // 每 5 秒检查一次
+        // 方案四：自适应轮询间隔
+        // - 无提醒：30 秒轮询一次（节省 CPU）
+        // - 最近提醒在 60 秒内：1 秒轮询（高精度触发）
+        // - 其他：5 秒轮询
+        int32_t next_check_ms = 30000;
+        {
+            std::lock_guard<std::mutex> lock(s_reminder_mutex);
+            if (!s_reminders.empty()) {
+                int64_t now_us = esp_timer_get_time();
+                int64_t min_remaining_ms = INT64_MAX;
+                for (auto& r : s_reminders) {
+                    int64_t rem_ms = (r.trigger_us - now_us) / 1000LL;
+                    if (rem_ms < min_remaining_ms) min_remaining_ms = rem_ms;
+                }
+                if (min_remaining_ms < 60000LL) next_check_ms = 1000;
+                else next_check_ms = 5000;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(next_check_ms));
 
         int64_t now_us = esp_timer_get_time();
         std::vector<std::string> to_fire;
@@ -201,11 +747,47 @@ static void ReminderTask(void*) {
 
         for (auto& msg : to_fire) {
             ESP_LOGI(TAG, "Reminder fired: %s", msg.c_str());
+            s_alarm_active = true;
+            std::string fire_msg = msg;
+
+            // ① 屏幕显示闹钟界面：scare 表情 + 提醒内容 + 操作提示
+            Application::GetInstance().Schedule([fire_msg]() {
+                Application::GetInstance().Alert(
+                    "⏰ 提醒时间到！",
+                    ("🔔 " + fire_msg + "\n\n按键关闭").c_str(),
+                    "scare"
+                );
+            });
+
+            // ② 重复响铃循环：每次响一声，每 500ms 检查一次，5 秒后再响
             auto& audio = Application::GetInstance().GetAudioService();
-            for (int i = 0; i < 3; i++) {
+            while (s_alarm_active) {
                 audio.PlaySound(Lang::Sounds::OGG_MORNING_ALARM);
-                vTaskDelay(pdMS_TO_TICKS(1200));
+                for (int i = 0; i < 10 && s_alarm_active; i++) {
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
             }
+
+            // ③ 用户按键关闭 — 显示确认界面
+            Application::GetInstance().Schedule([]() {
+                auto display = Board::GetInstance().GetDisplay();
+                display->SetStatus("✅ 好的~");
+                display->SetEmotion("happy");
+                display->SetChatMessage("system", "提醒已关闭 😊");
+            });
+            vTaskDelay(pdMS_TO_TICKS(1500));
+
+            // ④ 恢复待机界面 + 通知 AI 语音播报
+            Application::GetInstance().Schedule([fire_msg]() {
+                auto display = Board::GetInstance().GetDisplay();
+                display->SetStatus(Lang::Strings::STANDBY);
+                display->SetEmotion("neutral");
+                display->SetChatMessage("system", "");
+                auto* proto = Application::GetInstance().GetProtocol();
+                if (proto) {
+                    proto->SendSensorEvent("提醒时间到了：" + fire_msg + "。请用语音告知用户。");
+                }
+            });
         }
     }
     vTaskDelete(nullptr);
@@ -776,9 +1358,11 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 if (delay_sec <= 0)  return std::string("延迟时间必须大于0秒");
 
                 int64_t trigger_us = esp_timer_get_time() + (int64_t)delay_sec * 1000000LL;
+                int reminder_id = 0;
                 {
                     std::lock_guard<std::mutex> lock(s_reminder_mutex);
-                    s_reminders.push_back({trigger_us, message, false});
+                    reminder_id = ++s_reminder_id_counter;
+                    s_reminders.push_back({reminder_id, trigger_us, message, false});
                 }
 
                 // 生成人性化时间描述
@@ -790,14 +1374,158 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 if (m > 0) when += std::to_string(m) + "分钟";
                 if (s > 0 && h == 0) when += std::to_string(s) + "秒";
 
-                ESP_LOGI(TAG, "Reminder set: in %ds → %s", delay_sec, message.c_str());
-                return "好的，" + when + "后我会提醒你：" + message;
+                ESP_LOGI(TAG, "Reminder set: id=%d in %ds → %s", reminder_id, delay_sec, message.c_str());
+                return "好的，" + when + "后我会提醒你：" + message + "（编号：" + std::to_string(reminder_id) + "）";
             } catch (...) {
                 return std::string("设置提醒失败，请检查参数");
             }
         });
 
+    // ===================== 查询提醒列表 =====================
+    server.AddTool(
+        "list_reminders",
+        "查询当前所有待触发的提醒列表，并显示剩余时间和编号。"
+        "当用户问'我有什么提醒'、'我设了什么闹钟'、'有几个提醒'时调用。",
+        PropertyList(std::vector<Property>()),
+        [](const PropertyList&) -> ReturnValue {
+            std::lock_guard<std::mutex> lock(s_reminder_mutex);
+            if (s_reminders.empty()) {
+                return std::string("当前没有待触发的提醒");
+            }
+            int64_t now_us = esp_timer_get_time();
+            std::string result = "当前有" + std::to_string(s_reminders.size()) + "个提醒：";
+            int idx = 1;
+            for (auto& r : s_reminders) {
+                int64_t rem_sec = (r.trigger_us - now_us) / 1000000LL;
+                if (rem_sec < 0) rem_sec = 0;
+                int h = (int)(rem_sec / 3600);
+                int m = (int)((rem_sec % 3600) / 60);
+                int s = (int)(rem_sec % 60);
+                std::string when;
+                if (h > 0) when += std::to_string(h) + "小时";
+                if (m > 0) when += std::to_string(m) + "分钟";
+                if (s > 0 && h == 0) when += std::to_string(s) + "秒";
+                if (when.empty()) when = "即将触发";
+                result += std::to_string(idx++) + ". " + when + "后：" + r.message
+                        + "（编号：" + std::to_string(r.id) + "）；";
+            }
+            return result;
+        });
+
+    // ===================== 取消指定提醒 =====================
+    server.AddTool(
+        "cancel_reminder",
+        "取消指定的提醒/闹钟。"
+        "参数 keyword: 提醒内容关键词（如'吃药'）或提醒编号（如'3'）。"
+        "当用户说'取消XXX提醒'、'取消编号N的提醒'时调用。",
+        PropertyList({
+            Property("keyword", kPropertyTypeString),
+        }),
+        [](const PropertyList& props) -> ReturnValue {
+            try {
+                std::string keyword = props["keyword"].value<std::string>();
+                if (keyword.empty()) return std::string("请提供要取消的提醒内容关键词或编号");
+
+                // 判断是否为纯数字（按编号取消）
+                bool by_id = !keyword.empty();
+                for (char c : keyword) {
+                    if (!isdigit((unsigned char)c)) { by_id = false; break; }
+                }
+                int target_id = by_id ? atoi(keyword.c_str()) : 0;
+
+                std::vector<std::string> cancelled;
+                {
+                    std::lock_guard<std::mutex> lock(s_reminder_mutex);
+                    auto it = s_reminders.begin();
+                    while (it != s_reminders.end()) {
+                        bool match = by_id
+                            ? (it->id == target_id)
+                            : (it->message.find(keyword) != std::string::npos);
+                        if (match) {
+                            cancelled.push_back(it->message);
+                            it = s_reminders.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                }
+
+                if (cancelled.empty()) return std::string("未找到匹配的提醒：") + keyword;
+                std::string result = "已取消" + std::to_string(cancelled.size()) + "个提醒：";
+                for (auto& msg : cancelled) result += msg + " ";
+                return result;
+            } catch (...) {
+                return std::string("取消提醒失败，请检查参数");
+            }
+        });
+
     ESP_LOGI(TAG, "Reminder Tool Registered.");
+
+    // ===================== 总台语音通话 =====================
+    server.AddTool(
+        "connect_station",
+        "【必须调用此工具】连接总台语音通话。"
+        "当用户说'接通总台'、'接通响应点'、'帮我给总台留言'、'呼叫总台'等有通话意图时调用。"
+        "调用后设备进入对讲机模式：按住按键录音，松开自动发送给总台。",
+        PropertyList(std::vector<Property>()),
+        [](const PropertyList&) -> ReturnValue {
+            if (IsStationCallActive()) {
+                return std::string("已经在通话模式中，按住按键说话，松开发送。若要退出请说'结束通话'。");
+            }
+            StationCallConnect();
+            return std::string("已连接总台通话！\n请按住按键说话，松开后自动发送给总台。\n等待总台回复时会自动播放。\n说'结束通话'可退出。");
+        });
+
+    server.AddTool(
+        "play_station_reply",
+        "播放总台发回的语音留言。"
+        "当用户说'播放留言'、'听留言'、'播放总台回复'、'听听总台说什么'时调用。"
+        "播放最新一条未听留言；若无留言则告知用户。",
+        PropertyList(std::vector<Property>()),
+        [](const PropertyList&) -> ReturnValue {
+            ScReply reply;
+            size_t remaining = 0;
+            {
+                std::lock_guard<std::mutex> lk(s_sc_reply_mutex);
+                if (s_sc_replies.empty()) {
+                    return std::string("当前没有未读留言。");
+                }
+                reply = s_sc_replies.back();   // 取最新一条
+                s_sc_replies.pop_back();
+                remaining = s_sc_replies.size();
+            }
+            // 后台下载并播放，避免阻塞 AI 响应
+            struct PlayArg { std::string msg_id; std::string url; };
+            auto* arg = new PlayArg{reply.msg_id, reply.url};
+            xTaskCreate([](void* a) {
+                auto* pa = (PlayArg*)a;
+                ScDownloadAndPlay(pa->msg_id, pa->url);
+                Application::GetInstance().Schedule([]() {
+                    ScUpdateReplyBadge();
+                });
+                delete pa;
+                vTaskDelete(nullptr);
+            }, "sc_play", 8192, arg, 3, nullptr);
+
+            std::string result = "正在播放总台留言...";
+            if (remaining > 0) result += "还有" + std::to_string(remaining) + "条留言未播放。";
+            return result;
+        });
+
+    server.AddTool(
+        "disconnect_station",
+        "断开总台通话连接，退出对讲机模式。"
+        "当用户说'结束通话'、'挂断'、'退出通话模式'时调用。",
+        PropertyList(std::vector<Property>()),
+        [](const PropertyList&) -> ReturnValue {
+            if (!IsStationCallActive()) {
+                return std::string("当前未处于通话模式。");
+            }
+            StationCallDisconnect();
+            return std::string("已断开总台通话，退出对讲机模式。");
+        });
+
+    ESP_LOGI(TAG, "Station Call Tools Registered.");
 
     // 启动后台跌倒检测任务、提醒任务和门磁监控任务
     StartFallDetectionMonitor();
