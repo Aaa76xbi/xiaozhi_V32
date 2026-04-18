@@ -6,6 +6,7 @@
 #include <esp_log.h>
 #include <string.h>
 #include <atomic>
+#include <deque>
 #include <mutex>
 #include <algorithm>
 #include <freertos/FreeRTOS.h>
@@ -26,6 +27,11 @@
 #include <opus_encoder.h>
 
 #define TAG "HomeDevice"
+
+// HTTP 超时标准（毫秒）
+static constexpr int HTTP_TIMEOUT_LOCAL_MS  = 5000;   // 本地 HA API 查询/控制
+static constexpr int HTTP_TIMEOUT_MEDIA_MS  = 8000;   // 本地媒体下载（JPEG 摄像头）
+static constexpr int HTTP_TIMEOUT_REMOTE_MS = 10000;  // 外网服务（音频上传/下载）
 
 // AI 视觉服务器（从服务端 capabilities 里获取，由 McpServer::ParseCapabilities 注入）
 static std::string s_vision_url;
@@ -71,11 +77,12 @@ std::string MyHomeDevice::GetEntityState(const char* base_url, const char* token
     std::string response_buffer;
 
     esp_http_client_config_t config = {};
-    config.url = url;
-    config.method = HTTP_METHOD_GET;
-    config.timeout_ms = 5000;
-    config.event_handler = _http_event_handler;
-    config.user_data = &response_buffer;
+    config.url                = url;
+    config.method             = HTTP_METHOD_GET;
+    config.timeout_ms         = 5000;
+    config.crt_bundle_attach  = esp_crt_bundle_attach;
+    config.event_handler      = _http_event_handler;
+    config.user_data          = &response_buffer;
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -115,9 +122,10 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
     ESP_LOGI(TAG, "Calling Service: %s for %s", url, entity_id);
 
     esp_http_client_config_t config = {};
-    config.url = url;
-    config.method = HTTP_METHOD_POST;
-    config.timeout_ms = 5000;
+    config.url               = url;
+    config.method            = HTTP_METHOD_POST;
+    config.timeout_ms        = 5000;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
     esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -145,12 +153,13 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
 // 通用：POST 到本地 HA，body 为自定义 JSON 字符串
 static void CallLocalHaService(const char* domain, const char* service, const std::string& body_json) {
     char url[256];
-    snprintf(url, sizeof(url), "http://192.168.1.105:8123/api/services/%s/%s", domain, service);
+    snprintf(url, sizeof(url), HA_CAMERA_URL "/api/services/%s/%s", domain, service);
 
     esp_http_client_config_t cfg = {};
-    cfg.url        = url;
-    cfg.method     = HTTP_METHOD_POST;
-    cfg.timeout_ms = 5000;
+    cfg.url               = url;
+    cfg.method            = HTTP_METHOD_POST;
+    cfg.timeout_ms        = 5000;
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     auto client = esp_http_client_init(&cfg);
     esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -172,8 +181,8 @@ static void CallLocalHaService(const char* domain, const char* service, const st
 // =================================================================================
 
 // ---------- 服务器配置 ----------
-#define STATION_SERVER      "http://8.217.168.200:8000"
-#define STATION_WS_URL      "ws://8.217.168.200:8000/device/2189666?token=xiaozhi2025"
+#define STATION_SERVER      "http://yzhserver.111yzh.cn:8000"
+#define STATION_WS_URL      "ws://yzhserver.111yzh.cn:8000/device/2189666?token=xiaozhi2025"
 #define STATION_TOKEN       "xiaozhi2025"
 #define STATION_ROOM_ID     "2189666"
 #define STATION_ROOM_NAME   "小智设备01"
@@ -198,7 +207,7 @@ static std::atomic<bool> s_sc_sending{false};     // 防止并发发送
 // ---------- 留言队列（最多保留5条）----------
 struct ScReply { std::string msg_id; std::string url; };
 static std::mutex            s_sc_reply_mutex;
-static std::vector<ScReply>  s_sc_replies;    // 待播放的回复（msg_id + url）
+static std::deque<ScReply>   s_sc_replies;    // 待播放的回复（msg_id + url），deque保证O(1)头删
 
 // 更新屏幕上的留言计数（必须在主线程 / Schedule 内调用）
 static void ScUpdateReplyBadge() {
@@ -295,11 +304,11 @@ static std::vector<uint8_t> BuildOgg(const std::vector<std::vector<uint8_t>>& pk
         7,0,0,0, 'E','S','P','3','2','S','C', 0,0,0,0};
     OggAppendPage(ogg, 0x00, 0, serial, seq_no, tags.data(), tags.size());
 
-    // Pages 2+: 每包一页，granule_pos 用 48kHz 单位（60ms 帧 = 2880 采样）
-    const uint32_t spf48 = 2880;
+    // granule_pos 必须用实际采样率计算（如16kHz×60ms=960采样/帧，不能硬编码48kHz的2880）
+    const uint32_t spf = static_cast<uint32_t>(sample_rate) * 60 / 1000;
     uint64_t granule = pre_skip;
     for (size_t i = 0; i < pkts.size(); i++) {
-        granule += spf48;
+        granule += spf;
         uint8_t htype = (i == pkts.size()-1) ? 0x04 : 0x00;
         OggAppendPage(ogg, htype, granule, serial, seq_no, pkts[i].data(), pkts[i].size());
     }
@@ -310,10 +319,11 @@ static std::vector<uint8_t> BuildOgg(const std::vector<std::vector<uint8_t>>& pk
 static void ScDownloadAndPlay(const std::string& msg_id, const std::string& url) {
     std::string audio_data;
     esp_http_client_config_t cfg = {};
-    cfg.url         = url.c_str();
-    cfg.method      = HTTP_METHOD_GET;
-    cfg.timeout_ms  = 15000;
-    cfg.buffer_size = 4096;
+    cfg.url                = url.c_str();
+    cfg.method             = HTTP_METHOD_GET;
+    cfg.timeout_ms         = HTTP_TIMEOUT_REMOTE_MS;
+    cfg.buffer_size        = 4096;
+    cfg.crt_bundle_attach  = esp_crt_bundle_attach;  // 支持 HTTPS 下载
     cfg.event_handler = [](esp_http_client_event_t* e) -> esp_err_t {
         if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data)
             ((std::string*)e->user_data)->append((const char*)e->data, e->data_len);
@@ -413,7 +423,7 @@ static bool ScUploadAudio(const std::vector<int16_t>& pcm) {
     esp_http_client_config_t cfg = {};
     cfg.url           = STATION_SERVER "/api/voice/upload";
     cfg.method        = HTTP_METHOD_POST;
-    cfg.timeout_ms    = 15000;
+    cfg.timeout_ms    = HTTP_TIMEOUT_REMOTE_MS;
     cfg.event_handler = [](esp_http_client_event_t* e) -> esp_err_t {
         if (e->event_id == HTTP_EVENT_ON_DATA && e->user_data)
             ((std::string*)e->user_data)->append((const char*)e->data, e->data_len);
@@ -541,7 +551,7 @@ static void ScWsEventHandler(void*, esp_event_base_t, int32_t event_id, void* ev
                 {
                     std::lock_guard<std::mutex> lk(s_sc_reply_mutex);
                     if (!url.empty()) {
-                        if (s_sc_replies.size() >= 5) s_sc_replies.erase(s_sc_replies.begin());
+                        if (s_sc_replies.size() >= 5) s_sc_replies.pop_front();
                         s_sc_replies.push_back({msg_id, url});
                     }
                 }
@@ -602,6 +612,14 @@ void StationCallDisconnect() {
         esp_websocket_client_stop(s_sc_ws);
         esp_websocket_client_destroy(s_sc_ws);
         s_sc_ws = nullptr;
+    }
+    // 等待发送任务结束，再释放 PSRAM 栈（StaticTask 不自动回收栈内存）
+    for (int i = 0; i < 300 && s_sc_sending.load(); i++) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (s_sc_send_stack) {
+        heap_caps_free(s_sc_send_stack);
+        s_sc_send_stack = nullptr;
     }
     {
         std::lock_guard<std::mutex> lk(s_sc_reply_mutex);
@@ -762,7 +780,7 @@ static void ReminderTask(void*) {
             // ② 重复响铃循环：每次响一声，每 500ms 检查一次，5 秒后再响
             auto& audio = Application::GetInstance().GetAudioService();
             while (s_alarm_active) {
-                audio.PlaySound(Lang::Sounds::OGG_MORNING_ALARM);
+                audio.PlaySound(Lang::Sounds::OGG_XIAOZHI_MORNING_ALARM);
                 for (int i = 0; i < 10 && s_alarm_active; i++) {
                     vTaskDelay(pdMS_TO_TICKS(500));
                 }
@@ -931,9 +949,10 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 const char* post_data = cJSON_PrintUnformatted(root);
 
                 esp_http_client_config_t config = {};
-                config.url = HA_CAMERA_PTZ_URL;
-                config.method = HTTP_METHOD_POST;
-                config.timeout_ms = 5000;
+                config.url               = HA_CAMERA_PTZ_URL;
+                config.method            = HTTP_METHOD_POST;
+                config.timeout_ms        = 5000;
+                config.crt_bundle_attach = esp_crt_bundle_attach;
 
                 esp_http_client_handle_t client = esp_http_client_init(&config);
                 esp_http_client_set_header(client, "Content-Type", "application/json");
@@ -975,9 +994,10 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 std::string jpeg_data;
                 {
                     esp_http_client_config_t dl_config = {};
-                    dl_config.url = HA_CAMERA_PROXY_URL;
-                    dl_config.method = HTTP_METHOD_GET;
-                    dl_config.timeout_ms = 15000;
+                    dl_config.url               = HA_CAMERA_PROXY_URL;
+                    dl_config.method            = HTTP_METHOD_GET;
+                    dl_config.timeout_ms        = HTTP_TIMEOUT_MEDIA_MS;
+                    dl_config.crt_bundle_attach = esp_crt_bundle_attach;
                     dl_config.event_handler = [](esp_http_client_event_t *evt) -> esp_err_t {
                         if (evt->event_id == HTTP_EVENT_ON_DATA && evt->user_data) {
                             auto* buf = (std::string*)evt->user_data;
@@ -1527,10 +1547,23 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
 
     ESP_LOGI(TAG, "Station Call Tools Registered.");
 
-    // 启动后台跌倒检测任务、提醒任务和门磁监控任务
-    StartFallDetectionMonitor();
+    // ===================== 紧急呼叫手机工具 =====================
+    server.AddTool(
+        "trigger_phone_call",
+        "紧急呼叫手机。当用户说'打个电话给我'、'给我手机拨个电话'、'帮我找找手机'等时，或当摄像头找不到手机时，调用此工具向用户手机发送紧急呼叫信号。"
+        "该工具会通过网络向ntfy.sh服务发送通知，手机端会收到标题为'Smart Home Call'、优先级最高的紧急呼叫信号，促使用户找到设备或手机。",
+        PropertyList(std::vector<Property>()),
+        [](const PropertyList&) -> ReturnValue {
+            TriggerEmergencyCall();
+            return std::string("好的，已向你的手机发送紧急呼叫信号！信号已发出，请查看你的手机。");
+        });
+
+    ESP_LOGI(TAG, "Emergency Call Tool Registered.");
+
+    // 启动后台监控任务（跌倒检测和门磁监控暂时禁用）
+    // StartFallDetectionMonitor();
     StartReminderTask();
-    StartDoorMonitor();
+    // StartDoorMonitor();
 }
 
 // ============================================================
@@ -1541,9 +1574,11 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
 static bool DownloadJpegFromHA(std::string& jpeg_data, const char* url) {
     jpeg_data.clear();
     esp_http_client_config_t cfg = {};
-    cfg.url = url;
-    cfg.method = HTTP_METHOD_GET;
-    cfg.timeout_ms = 12000;
+    cfg.url               = url;
+    cfg.method            = HTTP_METHOD_GET;
+    cfg.timeout_ms        = 12000;
+    cfg.buffer_size       = 8192;   // 加大接收缓冲，加速公网下载
+    cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.event_handler = [](esp_http_client_event_t *evt) -> esp_err_t {
         if (evt->event_id == HTTP_EVENT_ON_DATA && evt->user_data)
             ((std::string*)evt->user_data)->append((const char*)evt->data, evt->data_len);
@@ -1654,8 +1689,9 @@ static void ShowJpegOnDisplay(const std::string& jpeg_data) {
 }
 
 // ============================================================
-//  跌倒检测后台任务
+//  跌倒检测后台任务 [暂时禁用]
 // ============================================================
+/*
 static void FallDetectionMonitorTask(void*) {
     static const int POLL_MS     = FALL_DETECT_POLL_SEC     * 1000;
     static const int COOLDOWN_MS = FALL_DETECT_COOLDOWN_SEC * 1000;
@@ -1743,7 +1779,7 @@ static void FallDetectionMonitorTask(void*) {
             auto& audio = Application::GetInstance().GetAudioService();
             for (int i = 0; i < 3; i++) {
                 audio.PlaySound(Lang::Sounds::OGG_VIBRATION);
-                vTaskDelay(pdMS_TO_TICKS(1200));
+                vTaskDelay(pdMS_TO_TICKS(600));  // 原1200ms，缩短为600ms更及时
             }
         }
     }
@@ -1753,19 +1789,21 @@ static void FallDetectionMonitorTask(void*) {
 void StartFallDetectionMonitor() {
     xTaskCreate(FallDetectionMonitorTask, "fall_detect", 8192, nullptr, 1, nullptr);
 }
+*/
 
 // ============================================================
-//  门磁监控后台任务：门打开时触发语音提醒
+//  门磁监控后台任务 [暂时禁用]
 // ============================================================
+/*
 static void DoorMonitorTask(void*) {
-    static const int POLL_MS     = 3000;   // 每 3 秒轮询一次
+    static const int POLL_MS     = 2000;   // 每 2 秒轮询一次（原3秒，提高响应速度）
     static const int COOLDOWN_MS = 30000;  // 报警后 30 秒内不重复提醒
 
     bool last_open = false;              // 上次检测到的状态（false=关, true=开）
     bool initialized = false;           // 第一次采样只记录状态，不报警
     int64_t last_alert_ms = -(int64_t)COOLDOWN_MS;
 
-    ESP_LOGI(TAG, "DoorMonitor started, poll=3s cooldown=30s");
+    ESP_LOGI(TAG, "DoorMonitor started, poll=2s cooldown=30s");
 
     while (true) {
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
@@ -1794,7 +1832,7 @@ static void DoorMonitorTask(void*) {
                 auto& audio = Application::GetInstance().GetAudioService();
                 for (int i = 0; i < 3; i++) {
                     audio.PlaySound(Lang::Sounds::OGG_VIBRATION);
-                    vTaskDelay(pdMS_TO_TICKS(1200));
+                    vTaskDelay(pdMS_TO_TICKS(600));  // 原1200ms，缩短为600ms更及时
                 }
             }
         }
@@ -1805,4 +1843,76 @@ static void DoorMonitorTask(void*) {
 
 void StartDoorMonitor() {
     xTaskCreate(DoorMonitorTask, "door_monitor", 4096, nullptr, 1, nullptr);
+}
+*/
+
+// =================================================================================
+// 紧急呼叫手机功能（发送HTTP请求到ntfy.sh）
+// =================================================================================
+
+void TriggerEmergencyCall() {
+    // 发送紧急呼叫到ntfy.sh服务
+    const char* topic = "iQP7X0XVYOVrSIAA";
+    const char url_template[] = "https://ntfy.sh/%s";
+    char url[256];
+    snprintf(url, sizeof(url), url_template, topic);
+
+    ESP_LOGI(TAG, "TriggerEmergencyCall: sending request to %s", url);
+
+    // 创建HTTP客户端
+    esp_http_client_config_t config = {};
+    config.url = url;
+    config.method = HTTP_METHOD_POST;
+    config.timeout_ms = 5000;
+    config.crt_bundle_attach = esp_crt_bundle_attach;
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client == nullptr) {
+        ESP_LOGE(TAG, "TriggerEmergencyCall: Failed to initialize HTTP client");
+        return;
+    }
+
+    // 设置请求头
+    esp_http_client_set_header(client, "Title", "Smart Home Call");
+    esp_http_client_set_header(client, "Priority", "5");
+    esp_http_client_set_header(client, "Tags", "phone,warning");
+
+    // 消息内容
+    const char* message = "智能管家呼叫！";
+    
+    // 设置POST数据（UTF-8编码）
+    esp_http_client_set_post_field(client, message, strlen(message));
+
+    // 执行请求
+    esp_err_t err = esp_http_client_perform(client);
+    
+    // 获取状态码
+    int status_code = esp_http_client_get_status_code(client);
+    
+    // 清理资源
+    esp_http_client_cleanup(client);
+
+    // 返回结果
+    if (err == ESP_OK && status_code == 200) {
+        ESP_LOGI(TAG, "TriggerEmergencyCall: ✅ 紧急呼叫已发送，状态码: %d", status_code);
+        
+        // 屏幕显示反馈信息
+        Application::GetInstance().Schedule([]() {
+            auto* display = Board::GetInstance().GetDisplay();
+            if (display) {
+                display->ShowNotification("☎️ 已向手机发送呼叫信号", 3000);
+            }
+        });
+    } else {
+        ESP_LOGE(TAG, "TriggerEmergencyCall: ❌ 紧急呼叫发送失败，HTTP错误: %s, 状态码: %d", 
+                 esp_err_to_name(err), status_code);
+        
+        // 屏幕显示错误信息
+        Application::GetInstance().Schedule([]() {
+            auto* display = Board::GetInstance().GetDisplay();
+            if (display) {
+                display->ShowNotification("❌ 手机呼叫失败，请检查网络", 3000);
+            }
+        });
+    }
 }

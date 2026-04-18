@@ -11,6 +11,7 @@
 #include "assets.h"
 #include "settings.h"
 
+#include <algorithm>
 #include <cstring>
 #include <esp_log.h>
 #include <cJSON.h>
@@ -150,7 +151,7 @@ void Application::CheckNewVersion(Ota& ota) {
                     break;
                 }
             }
-            retry_delay *= 2; // 每次重试后延迟时间翻倍
+            retry_delay = std::min(retry_delay * 2, 300); // 指数退避，最多等 5 分钟
             continue;
         }
         retry_count = 0;

@@ -270,7 +270,15 @@ public:
     }
 
     std::string Call(const PropertyList& properties) {
-        ReturnValue return_value = callback_(properties);
+        ReturnValue return_value;
+        try {
+            return_value = callback_(properties);
+        } catch (const std::exception& e) {
+            // 工具回调内部异常：返回错误文本，避免崩溃重启
+            return_value = std::string("[工具执行错误] ") + e.what();
+        } catch (...) {
+            return_value = std::string("[工具执行错误] 未知异常");
+        }
         // 返回结果
         cJSON* result = cJSON_CreateObject();
         cJSON* content = cJSON_CreateArray();

@@ -158,6 +158,62 @@ private:
     // 物联网初始化，逐步迁移到 MCP 协议
     void InitializeTools() {
         static LampController lamp(LAMP_GPIO);
+
+        // 注册打电话工具
+        auto& mcp_server = McpServer::GetInstance();
+        
+        mcp_server.AddTool("self.call_phone",
+            "当用户需要找手机或主动要求拨打电话时，使用此工具发送紧急呼叫信号到手机。",
+            PropertyList(),  // 无参数
+            [](const PropertyList& properties) -> ReturnValue {
+                // 发送紧急呼叫到ntfy.sh服务
+                const char* topic = "iQP7X0XVYOVrSIAA";
+                const char url_template[] = "https://ntfy.sh/%s";
+                char url[256];
+                snprintf(url, sizeof(url), url_template, topic);
+
+                // 创建HTTP客户端
+                esp_http_client_config_t config = {};
+                config.url = url;
+                config.method = HTTP_METHOD_POST;
+                config.timeout_ms = 5000;
+                config.crt_bundle_attach = esp_crt_bundle_attach;
+
+                esp_http_client_handle_t client = esp_http_client_init(&config);
+                if (client == nullptr) {
+                    throw std::runtime_error("Failed to initialize HTTP client");
+                }
+
+                // 设置请求头
+                esp_http_client_set_header(client, "Title", "Smart Home Call");
+                esp_http_client_set_header(client, "Priority", "5");
+                esp_http_client_set_header(client, "Tags", "phone,warning");
+
+                // 消息内容
+                const char* message = "智能管家呼叫！";
+                
+                // 设置POST数据（UTF-8编码）
+                esp_http_client_set_post_field(client, message, strlen(message));
+
+                // 执行请求
+                esp_err_t err = esp_http_client_perform(client);
+                
+                // 获取状态码
+                int status_code = esp_http_client_get_status_code(client);
+                
+                // 清理资源
+                esp_http_client_cleanup(client);
+
+                // 返回结果
+                if (err == ESP_OK && status_code == 200) {
+                    ESP_LOGI(TAG, "✅ 紧急呼叫已发送，状态码: %d", status_code);
+                    return true;
+                } else {
+                    ESP_LOGE(TAG, "❌ 紧急呼叫发送失败，HTTP错误: %s, 状态码: %d", 
+                             esp_err_to_name(err), status_code);
+                    throw std::runtime_error("Failed to send emergency call");
+                }
+            });
     }
 
 public:

@@ -14,7 +14,8 @@
 
 // =================【配置 B：新设备 (本地 HA)】=================
 // #define HA_NEW_URL   "http://192.168.0.12:8123/api"
-#define HA_NEW_URL   "http://192.168.1.105:8123/api"
+// #define HA_NEW_URL   "http://192.168.1.107:8123/api"
+#define HA_NEW_URL   "https://ha.111yzh.cn/api"
 #define HA_NEW_TOKEN "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJlMjhhZTU4ZjFjZmE0ZGI5YjNiNTM0NmM4MzZmMjIyYiIsImlhdCI6MTc3MDI5NTY5OSwiZXhwIjoyMDg1NjU1Njk5fQ.8AkqWHvGNxOfH1BsN0JrNcVBX-d1SMS6tY5wBQuIkTM"
 
 #define ENTITY_SMART_PLUG  "switch.zhi_neng_cha_zuo_socket_1"
@@ -29,18 +30,19 @@
 #define ENTITY_SPEAKER_CMD "text.xiaomi_l05b_030f_execute_text_directive"
 
 // =================【配置 C：TP-Link 摄像头（客厅）】=================
-#define HA_CAMERA_URL    "http://192.168.1.105:8123"
+// #define HA_CAMERA_URL    "http://192.168.1.107:8123"
+#define HA_CAMERA_URL    "https://ha.111yzh.cn"
 #define HA_CAMERA_TOKEN  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjM2ZiNzlhNjJmMGE0ZTA1YjViNzFmZDNjZjM2ZjRiYiIsImlhdCI6MTc3MzgzNjQ3NCwiZXhwIjoyMDg5MTk2NDc0fQ.Euaz_kC1FTB_UMq4g7hBCuMMMF5cNb1DdDScAMyRaiM"
 #define HA_CAMERA_ENTITY "camera.ke_ting_she_xiang_tou_mainstream"
 #define HA_CAMERA_PTZ_URL         HA_CAMERA_URL "/api/services/onvif/ptz"
-// AI描述用：800px宽，HA服务端缩放，下载快（约50KB）且AI分析细节足够
-#define HA_CAMERA_PROXY_URL       HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY "?width=1000"
+// AI描述用：640px宽（公网访问体积约30-40KB，避免下载超时）
+#define HA_CAMERA_PROXY_URL       HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY "?width=640"
 // 显示用缩图（480px宽，HA服务端缩放）：解码后约230KB，适合240×240圆屏
 #define HA_CAMERA_PROXY_SMALL_URL HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY "?width=600"
 // Person Detection 传感器（有人在画面时为 on）
 #define HA_CAMERA_MOTION_URL     HA_CAMERA_URL "/api/states/binary_sensor.ke_ting_she_xiang_tou_person_detection"
 // 有人时每 10 秒分析一次；跌倒报警后冷却 120 秒再重新报警
-#define FALL_DETECT_POLL_SEC     10
+#define FALL_DETECT_POLL_SEC     5
 #define FALL_DETECT_COOLDOWN_SEC 120
 
 // =================【配置 D：老人监控平台】=================
@@ -66,6 +68,9 @@ bool IsStationCallActive();
 void StationCallConnect();
 void StationCallStartRecord();
 void StationCallStopRecord();
+
+// 紧急呼叫手机（当找不到手机或用户主动要求时调用）
+void TriggerEmergencyCall();
 
 
 class MyHomeDevice {

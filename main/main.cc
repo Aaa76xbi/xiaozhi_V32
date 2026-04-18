@@ -9,6 +9,7 @@
 #include "esp_websocket_client.h"
 #include "cJSON.h"
 #include "application.h"
+#include "wifi_station.h"
 #include "nvs_flash.h"
 #include "esp_event.h"
 
@@ -175,33 +176,19 @@ void handle_ws_message(const char *payload) {
     bool is_leave_msg = (strstr(payload, "\\u79bb\\u5750") != NULL) || 
                         (strstr(payload, "\\u79bb\\u5367") != NULL);
 
-    // 确保 main.cc 里的 handle_ws_message 包含此段逻辑
-    if (strstr(payload, "u5728\\u5750") || strstr(payload, "u5728\\u5367")) {
-        if (!g_is_sitting) {
-            g_is_sitting = true;
-            g_sit_start_time = get_time_ms();
-            g_has_alerted = false;
-            ESP_LOGI(TAG, "👇 状态更新：已坐下，发送 AI 指令...");
-            
-            // 关键：给系统留出 500ms 处理 MQTT 的时间
-            vTaskDelay(pdMS_TO_TICKS(500)); 
-            send_to_ai("系统检测到主人刚刚坐下了。请用热情、温暖的语气问候主人，并询问是否需要打开电视或打开窗帘？");
-        }
-    }
-
     // --- 场景 A: 坐下 ---
     if (is_sitting_msg) {
         ESP_LOGI(TAG, "🔔 匹配到：在坐/在卧 (Unicode)");
-        
+
         if (!g_is_sitting) {
             g_is_sitting = true;
             g_sit_start_time = get_time_ms();
             g_has_alerted = false;
-            ESP_LOGI(TAG, "👇 状态更新：已坐下，等待 1 秒后触发 AI...");
+            ESP_LOGI(TAG, "👇 状态更新：已坐下，触发 AI...");
 
-            // [关键优化] 给网络 1 秒钟稳定时间，防止瞬间拥堵
-            vTaskDelay(pdMS_TO_TICKS(1000)); 
-            
+            // 短暂等待让网络栈处理当前帧，避免瞬间拥堵
+            vTaskDelay(pdMS_TO_TICKS(200));
+
             send_to_ai("系统检测到主人刚刚坐下了。请用热情、温暖的语气问候主人，并询问是否需要打开电视或打开窗帘？");
         }
     }
@@ -246,11 +233,16 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     }
 }
 
+/* [暂时禁用] 坐垫检测任务
 void sensor_monitor_task(void *pvParameters) {
-    // 等待 20 秒让 WiFi 连上
-    ESP_LOGW(TAG, "⏳ 传感器任务已启动，等待 20 秒让 WiFi 先连接...");
-    vTaskDelay(pdMS_TO_TICKS(20000));
-    ESP_LOGI(TAG, "✅ 预热结束，开始监控...");
+    // 等待 WiFi 连接（事件驱动，最多等 60 秒，避免固定 20 秒硬等）
+    ESP_LOGW(TAG, "⏳ 传感器任务已启动，等待 WiFi 连接...");
+    if (!WifiStation::GetInstance().WaitForConnected(60000)) {
+        ESP_LOGE(TAG, "WiFi 连接超时（60s），传感器任务退出");
+        vTaskDelete(nullptr);
+        return;
+    }
+    ESP_LOGI(TAG, "✅ WiFi 已连接，开始监控...");
 
     // 1. 登录循环
     while (1) {
@@ -289,6 +281,7 @@ void sensor_monitor_task(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
+*/ // [暂时禁用] 坐垫检测任务结束
 
 // ===================== 程序入口 =====================
 
