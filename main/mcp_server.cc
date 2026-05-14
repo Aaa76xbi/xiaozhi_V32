@@ -458,14 +458,43 @@ void McpServer::ReplyError(int id, const std::string& message) {
     Application::GetInstance().SendMcpMessage(payload);
 }
 
+void McpServer::ApplyConfig() {
+    auto& cfg = McpConfig::GetInstance();
+    overrides_.clear();
+    alias_map_.clear();
+    for (auto* tool : tools_) {
+        auto ov = cfg.GetOverride(tool->name());
+        overrides_[tool->name()] = ov;
+        if (!ov.alias.empty()) {
+            alias_map_[ov.alias] = tool->name();
+        }
+    }
+    ESP_LOGI(TAG, "ApplyConfig: %u tools, %u aliases", (unsigned)tools_.size(), (unsigned)alias_map_.size());
+}
+
+std::string McpServer::GetAllToolsInfoJson() {
+    cJSON* arr = cJSON_CreateArray();
+    for (auto* tool : tools_) {
+        cJSON* obj = cJSON_CreateObject();
+        cJSON_AddStringToObject(obj, "name", tool->name().c_str());
+        cJSON_AddStringToObject(obj, "description", tool->description().c_str());
+        cJSON_AddItemToArray(arr, obj);
+    }
+    char* str = cJSON_PrintUnformatted(arr);
+    std::string result(str);
+    cJSON_free(str);
+    cJSON_Delete(arr);
+    return result;
+}
+
 void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_only_tools) {
     const int max_payload_size = 8000;
     std::string json = "{\"tools\":[";
-    
+
     bool found_cursor = cursor.empty();
     auto it = tools_.begin();
     std::string next_cursor = "";
-    
+
     while (it != tools_.end()) {
         // 如果我们还没有找到起始位置，继续搜索
         if (!found_cursor) {
@@ -481,23 +510,53 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
             ++it;
             continue;
         }
-        
+
+        // 检查是否被禁用
+        auto ov_it = overrides_.find((*it)->name());
+        if (ov_it != overrides_.end() && !ov_it->second.enabled) {
+            ++it;
+            continue;
+        }
+
+        // 生成工具 JSON，若有别名/描述覆盖则修改
+        std::string tool_json_str;
+        bool has_override = (ov_it != overrides_.end()) &&
+                            (!ov_it->second.alias.empty() || !ov_it->second.description.empty());
+        if (has_override) {
+            cJSON* item = cJSON_Parse((*it)->to_json().c_str());
+            if (item) {
+                if (!ov_it->second.alias.empty()) {
+                    cJSON_ReplaceItemInObject(item, "name",
+                        cJSON_CreateString(ov_it->second.alias.c_str()));
+                }
+                if (!ov_it->second.description.empty()) {
+                    cJSON_ReplaceItemInObject(item, "description",
+                        cJSON_CreateString(ov_it->second.description.c_str()));
+                }
+                char* str = cJSON_PrintUnformatted(item);
+                tool_json_str = std::string(str) + ",";
+                cJSON_free(str);
+                cJSON_Delete(item);
+            }
+        } else {
+            tool_json_str = (*it)->to_json() + ",";
+        }
+
         // 添加tool前检查大小
-        std::string tool_json = (*it)->to_json() + ",";
-        if (json.length() + tool_json.length() + 30 > max_payload_size) {
+        if (json.length() + tool_json_str.length() + 30 > max_payload_size) {
             // 如果添加这个tool会超出大小限制，设置next_cursor并退出循环
             next_cursor = (*it)->name();
             break;
         }
-        
-        json += tool_json;
+
+        json += tool_json_str;
         ++it;
     }
-    
+
     if (json.back() == ',') {
         json.pop_back();
     }
-    
+
     if (json.back() == '[' && !tools_.empty()) {
         // 如果没有添加任何tool，返回错误
         ESP_LOGE(TAG, "tools/list: Failed to add tool %s because of payload size limit", next_cursor.c_str());
@@ -510,19 +569,26 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
     } else {
         json += "],\"nextCursor\":\"" + next_cursor + "\"}";
     }
-    
+
     ReplyResult(id, json);
 }
 
 void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments) {
-    auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
-                                 [&tool_name](const McpTool* tool) { 
-                                     return tool->name() == tool_name; 
+    // 若 AI 使用别名调用，先反向解析到原始名
+    std::string resolved_name = tool_name;
+    auto alias_it = alias_map_.find(tool_name);
+    if (alias_it != alias_map_.end()) {
+        resolved_name = alias_it->second;
+    }
+
+    auto tool_iter = std::find_if(tools_.begin(), tools_.end(),
+                                 [&resolved_name](const McpTool* tool) {
+                                     return tool->name() == resolved_name;
                                  });
     
     if (tool_iter == tools_.end()) {
-        ESP_LOGE(TAG, "tools/call: Unknown tool: %s", tool_name.c_str());
-        ReplyError(id, "Unknown tool: " + tool_name);
+        ESP_LOGE(TAG, "tools/call: Unknown tool: %s", resolved_name.c_str());
+        ReplyError(id, "Unknown tool: " + resolved_name);
         return;
     }
 

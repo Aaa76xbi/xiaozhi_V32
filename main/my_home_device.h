@@ -40,7 +40,8 @@
 // 显示用缩图（480px宽，HA服务端缩放）：解码后约230KB，适合240×240圆屏
 #define HA_CAMERA_PROXY_SMALL_URL HA_CAMERA_URL "/api/camera_proxy/" HA_CAMERA_ENTITY "?width=600"
 // Person Detection 传感器（有人在画面时为 on）
-#define HA_CAMERA_MOTION_URL     HA_CAMERA_URL "/api/states/binary_sensor.ke_ting_she_xiang_tou_person_detection"
+#define HA_CAMERA_MOTION_SENSOR  "binary_sensor.ke_ting_she_xiang_tou_person_detection"
+#define HA_CAMERA_MOTION_URL     HA_CAMERA_URL "/api/states/" HA_CAMERA_MOTION_SENSOR
 // 有人时每 10 秒分析一次；跌倒报警后冷却 120 秒再重新报警
 #define FALL_DETECT_POLL_SEC     5
 #define FALL_DETECT_COOLDOWN_SEC 120

@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\esp\\\\\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"C:\\\\esp\\\\\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"D:\\\\esp\\\\\" -ErrorAction SilentlyContinue | Select-Object Name)",
+      "PowerShell(Get-ChildItem $env:IDF_PATH -ErrorAction SilentlyContinue | Select-Object -First 5 Name; echo \"IDF_PATH=$env:IDF_PATH\")",
+      "PowerShell(Get-Command idf.py -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\\", \"D:\\\\\", \"$env:USERPROFILE\" -Filter \"export.ps1\" -Recurse -Depth 5 -ErrorAction SilentlyContinue | Select-Object FullName)",
+      "PowerShell(D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.10_env\\\\Scripts\\\\python.exe -m pip install rich)",
+      "PowerShell(D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.10_env\\\\Scripts\\\\python.exe -m pip install packaging)",
+      "PowerShell(D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.10_env\\\\Scripts\\\\python.exe -m pip install -r D:\\\\esp-idf-v55\\\\v5.5.2\\\\esp-idf\\\\tools\\\\requirements\\\\requirements.core.txt -c D:\\\\espreseeif\\\\Espressif\\\\espidf.constraints.v5.5.txt 2>&1)",
+      "Bash(cd /d)",
+      "Bash(find \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\main\\\\boards\\\\yunxi-spacemans\" -type f)"
+    ]
+  }
+}

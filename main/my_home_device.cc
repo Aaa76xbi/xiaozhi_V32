@@ -1,4 +1,5 @@
 #include "my_home_device.h"
+#include "ha_config.h"
 #include <mcp_server.h>
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
@@ -38,7 +39,7 @@ static std::string s_vision_url;
 static std::string s_vision_token;
 
 // 前向声明（实现在文件末尾）
-static bool DownloadJpegFromHA(std::string& jpeg_data, const char* url = HA_CAMERA_PROXY_URL);
+static bool DownloadJpegFromHA(std::string& jpeg_data, const char* url, const std::string& token = "");
 static void ShowJpegOnDisplay(const std::string& jpeg_data);
 
 void SetVisionUrl(const std::string& url, const std::string& token) {
@@ -152,18 +153,19 @@ void MyHomeDevice::CallService(const char* base_url, const char* token, const ch
 
 // 通用：POST 到本地 HA，body 为自定义 JSON 字符串
 static void CallLocalHaService(const char* domain, const char* service, const std::string& body_json) {
-    char url[256];
-    snprintf(url, sizeof(url), HA_CAMERA_URL "/api/services/%s/%s", domain, service);
+    auto& ha = HaConfig::GetInstance();
+    std::string url_str   = ha.ha_camera_url() + "/api/services/" + domain + "/" + service;
+    std::string auth_hdr  = "Bearer " + ha.ha_camera_token();
 
     esp_http_client_config_t cfg = {};
-    cfg.url               = url;
+    cfg.url               = url_str.c_str();
     cfg.method            = HTTP_METHOD_POST;
     cfg.timeout_ms        = 5000;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
 
     auto client = esp_http_client_init(&cfg);
     esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, "Authorization", "Bearer " HA_CAMERA_TOKEN);
+    esp_http_client_set_header(client, "Authorization", auth_hdr.c_str());
     esp_http_client_set_post_field(client, body_json.c_str(), (int)body_json.size());
 
     esp_err_t err = esp_http_client_perform(client);
@@ -835,58 +837,59 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 std::string device = properties["device"].value<std::string>();
                 std::string action = properties["action"].value<std::string>();
 
-                const char* target_entity = nullptr;
-                const char* target_url = nullptr;
-                const char* target_token = nullptr;
-                std::string device_name_cn = "";
+                auto& ha = HaConfig::GetInstance();
+                std::string target_entity;
+                std::string target_url;
+                std::string target_token;
+                std::string device_name_cn;
                 std::string domain = "switch";
 
                 // --- 路由逻辑 ---
                 if (device == "plug") {
-                    target_entity = ENTITY_SMART_PLUG;
+                    target_entity  = ha.entity_smart_plug();
                     device_name_cn = "智能插座";
-                    target_url = HA_NEW_URL;
-                    target_token = HA_NEW_TOKEN;
+                    target_url     = ha.ha_new_url();
+                    target_token   = ha.ha_new_token();
                 }
                 else if (device == "door") {
-                    target_entity = ENTITY_DOOR_SENSOR;
+                    target_entity  = ha.entity_door_sensor();
                     device_name_cn = "大门传感器";
-                    domain = "binary_sensor";
-                    target_url = HA_NEW_URL;
-                    target_token = HA_NEW_TOKEN;
+                    domain         = "binary_sensor";
+                    target_url     = ha.ha_new_url();
+                    target_token   = ha.ha_new_token();
                 }
                 else if (device == "tv") {
-                    target_entity = ENTITY_TV;
+                    target_entity  = ha.entity_tv();
                     device_name_cn = "电视";
-                    target_url = HA_OLD_URL;
-                    target_token = HA_OLD_TOKEN;
+                    target_url     = ha.ha_old_url();
+                    target_token   = ha.ha_old_token();
                 }
                 else if (device == "water_valve") {
-                    target_entity = ENTITY_WATER_VALVE;
+                    target_entity  = ha.entity_water_valve();
                     device_name_cn = "水阀";
-                    target_url = HA_OLD_URL;
-                    target_token = HA_OLD_TOKEN;
+                    target_url     = ha.ha_old_url();
+                    target_token   = ha.ha_old_token();
                 }
                 else if (device == "gas_valve") {
-                    target_entity = ENTITY_GAS_VALVE;
+                    target_entity  = ha.entity_gas_valve();
                     device_name_cn = "气阀";
-                    target_url = HA_OLD_URL;
-                    target_token = HA_OLD_TOKEN;
+                    target_url     = ha.ha_old_url();
+                    target_token   = ha.ha_old_token();
                 }
                 else if (device == "main_switch") {
-                    target_entity = ENTITY_MAIN_SWITCH;
+                    target_entity  = ha.entity_main_switch();
                     device_name_cn = "总闸";
-                    target_url = HA_OLD_URL;
-                    target_token = HA_OLD_TOKEN;
+                    target_url     = ha.ha_old_url();
+                    target_token   = ha.ha_old_token();
                 }
 
-                if (!target_entity) {
+                if (target_entity.empty()) {
                     return std::string("错误: 找不到该设备。");
                 }
 
                 // 1. 查询
                 if (action == "query") {
-                    std::string state_raw = GetEntityState(target_url, target_token, target_entity);
+                    std::string state_raw = GetEntityState(target_url.c_str(), target_token.c_str(), target_entity.c_str());
                     std::string state_cn = state_raw;
                     if (device == "door") {
                         // binary_sensor contact: on=接触=门已关闭, off=断开=门已打开
@@ -907,7 +910,7 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 std::string service = (action == "on") ? "turn_on" : "turn_off";
                 std::string action_cn = (action == "on") ? "打开" : "关闭";
 
-                CallService(target_url, target_token, domain.c_str(), service.c_str(), target_entity);
+                CallService(target_url.c_str(), target_token.c_str(), domain.c_str(), service.c_str(), target_entity.c_str());
                 return "好的，已帮你" + action_cn + device_name_cn;
 
             } catch (...) {
@@ -922,15 +925,18 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
     // 云台 PTZ 控制
     server.AddTool(
         "control_ha_camera",
-        "控制客厅TP-Link摄像头云台。参数: direction(上/下/左/右), distance(移动距离0.1~1.0, 默认0.3), speed(速度0.1~1.0, 默认0.5)",
+        "控制摄像头云台。entity_id留空=客厅主摄像头；控制其他摄像头时填入其 HA entity_id。"
+        "direction: 上/下/左/右。distance: 移动距离0.1~1.0（默认0.3）。speed: 速度0.1~1.0（默认0.5）。",
         PropertyList({
             Property("direction", kPropertyTypeString),
             Property("distance", kPropertyTypeString, std::string("0.3")),
             Property("speed",    kPropertyTypeString, std::string("0.5")),
+            Property("entity_id", kPropertyTypeString, std::string("")),
         }),
         [](const PropertyList& properties) -> ReturnValue {
             try {
                 std::string direction = properties["direction"].value<std::string>();
+                std::string entity_id = properties["entity_id"].value<std::string>();
                 float distance = std::stof(properties["distance"].value<std::string>());
                 float speed    = std::stof(properties["speed"].value<std::string>());
 
@@ -941,22 +947,43 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 else if (direction == "右")  { axis = "pan";  value = "RIGHT"; }
                 else return std::string("错误: 不支持的方向，请用 上/下/左/右");
 
+                auto& ha_cam = HaConfig::GetInstance();
+                std::string ptz_url, cam_auth, target_entity;
+                if (entity_id.empty()) {
+                    ptz_url       = ha_cam.ha_camera_ptz_url();
+                    cam_auth      = "Bearer " + ha_cam.ha_camera_token();
+                    target_entity = ha_cam.ha_camera_entity();
+                } else {
+                    // 从自定义设备列表查找该摄像头的 HA 实例
+                    auto devs = ha_cam.GetCustomDevices();
+                    std::string ha_type = "new";
+                    for (const auto& d : devs) {
+                        if (d.entity == entity_id) { ha_type = d.ha; break; }
+                    }
+                    std::string base_url = (ha_type == "old") ? ha_cam.ha_old_url() : ha_cam.ha_new_url();
+                    if (base_url.size() >= 4 && base_url.compare(base_url.size()-4, 4, "/api") == 0)
+                        base_url.resize(base_url.size() - 4);
+                    ptz_url       = base_url + "/api/services/onvif/ptz";
+                    cam_auth      = "Bearer " + ((ha_type == "old") ? ha_cam.ha_old_token() : ha_cam.ha_new_token());
+                    target_entity = entity_id;
+                }
+
                 cJSON* root = cJSON_CreateObject();
-                cJSON_AddStringToObject(root, "entity_id", HA_CAMERA_ENTITY);
+                cJSON_AddStringToObject(root, "entity_id", target_entity.c_str());
                 cJSON_AddStringToObject(root, axis.c_str(), value.c_str());
                 cJSON_AddNumberToObject(root, "distance", distance);
                 cJSON_AddNumberToObject(root, "speed", speed);
                 const char* post_data = cJSON_PrintUnformatted(root);
 
                 esp_http_client_config_t config = {};
-                config.url               = HA_CAMERA_PTZ_URL;
+                config.url               = ptz_url.c_str();
                 config.method            = HTTP_METHOD_POST;
                 config.timeout_ms        = 5000;
                 config.crt_bundle_attach = esp_crt_bundle_attach;
 
                 esp_http_client_handle_t client = esp_http_client_init(&config);
                 esp_http_client_set_header(client, "Content-Type", "application/json");
-                esp_http_client_set_header(client, "Authorization", "Bearer " HA_CAMERA_TOKEN);
+                esp_http_client_set_header(client, "Authorization", cam_auth.c_str());
                 esp_http_client_set_post_field(client, post_data, strlen(post_data));
 
                 esp_err_t err = esp_http_client_perform(client);
@@ -977,24 +1004,48 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
     // AI 描述画面
     server.AddTool(
         "describe_ha_camera",
-        "查看客厅摄像头并让AI描述画面内容。当用户问'客厅有什么'、'客厅什么情况'、'客厅有没有人'、'门口什么情况'、'帮我看看监控'等时调用。"
-        "【重要】调用此工具前，必须先对用户说一句话，例如'稍等，我来分析下客厅环境'（可灵活表达，但必须先说再调用）。",
+        "查看摄像头画面并让AI描述内容。entity_id留空=客厅主摄像头；需要看其他摄像头时填入该摄像头的 HA entity_id。"
+        "当用户问'客厅有什么'、'客厅什么情况'、'帮我看看监控'等时调用（entity_id留空）；"
+        "当用户指定某个摄像头时填入对应实体ID。"
+        "【重要】调用前必须先说一句话，如'稍等，我来分析下画面'。",
         PropertyList({
-            Property("question", kPropertyTypeString, std::string("请详细描述画面中看到了什么，有没有人，有哪些物体"))
+            Property("question", kPropertyTypeString, std::string("请详细描述画面中看到了什么，有没有人，有哪些物体")),
+            Property("entity_id", kPropertyTypeString, std::string(""))
         }),
         [](const PropertyList& properties) -> ReturnValue {
             try {
                 if (s_vision_url.empty()) {
                     return std::string("AI视觉服务未配置，无法分析画面");
                 }
-                auto question = properties["question"].value<std::string>();
+                auto question  = properties["question"].value<std::string>();
+                auto entity_id = properties["entity_id"].value<std::string>();
                 auto network = Board::GetInstance().GetNetwork();
 
                 // Step 1: 用 esp_http_client 下载 JPEG（支持大型二进制响应，避免 HttpClient 8KB 缓冲死锁）
                 std::string jpeg_data;
                 {
+                    auto& ha_d = HaConfig::GetInstance();
+                    std::string proxy_url, dl_auth;
+                    if (entity_id.empty()) {
+                        proxy_url = ha_d.ha_camera_proxy_url();
+                        dl_auth   = "Bearer " + ha_d.ha_camera_token();
+                    } else {
+                        // 从自定义设备列表查找该 entity 属于哪个 HA 实例
+                        auto devs = ha_d.GetCustomDevices();
+                        std::string ha_type = "new";
+                        for (const auto& d : devs) {
+                            if (d.entity == entity_id) { ha_type = d.ha; break; }
+                        }
+                        std::string base_url = (ha_type == "old") ? ha_d.ha_old_url() : ha_d.ha_new_url();
+                        std::string tok      = (ha_type == "old") ? ha_d.ha_old_token() : ha_d.ha_new_token();
+                        if (base_url.size() >= 4 && base_url.compare(base_url.size()-4, 4, "/api") == 0)
+                            base_url.resize(base_url.size() - 4);
+                        proxy_url = base_url + "/api/camera_proxy/" + entity_id + "?width=640";
+                        dl_auth   = "Bearer " + tok;
+                    }
+
                     esp_http_client_config_t dl_config = {};
-                    dl_config.url               = HA_CAMERA_PROXY_URL;
+                    dl_config.url               = proxy_url.c_str();
                     dl_config.method            = HTTP_METHOD_GET;
                     dl_config.timeout_ms        = HTTP_TIMEOUT_MEDIA_MS;
                     dl_config.crt_bundle_attach = esp_crt_bundle_attach;
@@ -1009,7 +1060,7 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                     dl_config.buffer_size = 8192;
 
                     esp_http_client_handle_t dl_client = esp_http_client_init(&dl_config);
-                    esp_http_client_set_header(dl_client, "Authorization", "Bearer " HA_CAMERA_TOKEN);
+                    esp_http_client_set_header(dl_client, "Authorization", dl_auth.c_str());
 
                     esp_err_t err = esp_http_client_perform(dl_client);
                     int dl_status = esp_http_client_get_status_code(dl_client);
@@ -1073,14 +1124,36 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
     // 把摄像头画面显示到设备屏幕
     server.AddTool(
         "show_camera_on_screen",
-        "把客厅摄像头当前画面截图并显示到设备屏幕上。当用户说'把画面传到屏幕'、"
-        "'显示监控画面'、'在屏幕上看'、'让我看看画面'等时调用。",
-        PropertyList(std::vector<Property>{}),
-        [](const PropertyList&) -> ReturnValue {
+        "把摄像头当前画面截图并显示到设备屏幕。entity_id留空=客厅主摄像头；"
+        "需要显示其他摄像头时填入该摄像头的 HA entity_id。"
+        "当用户说'把画面传到屏幕'、'显示监控画面'、'在屏幕上看'、'让我看看画面'等时调用。",
+        PropertyList({
+            Property("entity_id", kPropertyTypeString, std::string(""))
+        }),
+        [](const PropertyList& props) -> ReturnValue {
             try {
+                std::string entity_id = props["entity_id"].value<std::string>();
                 std::string jpeg_data;
-                // 用缩图 URL（480px宽），避免解码 7MB+ 大图造成 OOM
-                if (!DownloadJpegFromHA(jpeg_data, HA_CAMERA_PROXY_SMALL_URL))
+                auto& ha = HaConfig::GetInstance();
+                std::string url, token;
+                if (entity_id.empty()) {
+                    url   = ha.ha_camera_proxy_small_url();
+                    token = ha.ha_camera_token();
+                } else {
+                    auto devs = ha.GetCustomDevices();
+                    std::string ha_type = "new";
+                    for (const auto& d : devs) {
+                        if (d.entity == entity_id) { ha_type = d.ha; break; }
+                    }
+                    std::string base_url = (ha_type == "old") ? ha.ha_old_url() : ha.ha_new_url();
+                    token    = (ha_type == "old") ? ha.ha_old_token() : ha.ha_new_token();
+                    // ha_old_url/ha_new_url 末尾带 /api，camera_proxy 需要不带 /api 的基础 URL
+                    if (base_url.size() >= 4 && base_url.compare(base_url.size()-4, 4, "/api") == 0)
+                        base_url.resize(base_url.size() - 4);
+                    url      = base_url + "/api/camera_proxy/" + entity_id + "?width=600";
+                }
+                ESP_LOGI(TAG, "show_camera_on_screen: entity='%s' url=%s", entity_id.c_str(), url.c_str());
+                if (!DownloadJpegFromHA(jpeg_data, url.c_str(), token))
                     return std::string("摄像头截图下载失败，请检查网络连接");
                 ShowJpegOnDisplay(jpeg_data);
                 return std::string("好的，画面已显示到屏幕上了");
@@ -1111,10 +1184,11 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 std::string pos_str  = props["position"].value<std::string>();
 
                 // 确定要控制哪些实体
-                std::vector<const char*> entities;
-                if (curtain == "1")   entities = { ENTITY_CURTAIN_1 };
-                else if (curtain == "2") entities = { ENTITY_CURTAIN_2 };
-                else                  entities = { ENTITY_CURTAIN_1, ENTITY_CURTAIN_2 };
+                auto& ha_c = HaConfig::GetInstance();
+                std::vector<std::string> entities;
+                if (curtain == "1")      entities = { ha_c.entity_curtain_1() };
+                else if (curtain == "2") entities = { ha_c.entity_curtain_2() };
+                else                     entities = { ha_c.entity_curtain_1(), ha_c.entity_curtain_2() };
 
                 const char* svc = nullptr;
                 if      (action == "open")  svc = "open_cover";
@@ -1123,9 +1197,9 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 else if (action == "set")   svc = "set_cover_position";
                 else return std::string("不支持的动作，请用 open/close/stop/set");
 
-                for (const char* eid : entities) {
+                for (const std::string& eid : entities) {
                     cJSON* body = cJSON_CreateObject();
-                    cJSON_AddStringToObject(body, "entity_id", eid);
+                    cJSON_AddStringToObject(body, "entity_id", eid.c_str());
                     if (action == "set") {
                         int pos = atoi(pos_str.c_str());
                         if (pos < 0) pos = 0;
@@ -1166,8 +1240,9 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 std::string action = props["action"].value<std::string>();
                 std::string vol_str = props["volume_level"].value<std::string>();
 
+                std::string spk_entity = HaConfig::GetInstance().entity_speaker();
                 cJSON* body = cJSON_CreateObject();
-                cJSON_AddStringToObject(body, "entity_id", ENTITY_SPEAKER);
+                cJSON_AddStringToObject(body, "entity_id", spk_entity.c_str());
 
                 const char* svc    = nullptr;
                 std::string result = "";
@@ -1215,10 +1290,11 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
                 std::string text = props["text"].value<std::string>();
                 if (text.empty()) return std::string("请提供文字内容");
 
-                const char* entity_id = (mode == "command") ? ENTITY_SPEAKER_CMD : ENTITY_SPEAKER_TTS;
+                auto& ha_spk = HaConfig::GetInstance();
+                std::string entity_id = (mode == "command") ? ha_spk.entity_speaker_cmd() : ha_spk.entity_speaker_tts();
 
                 cJSON* body = cJSON_CreateObject();
-                cJSON_AddStringToObject(body, "entity_id", entity_id);
+                cJSON_AddStringToObject(body, "entity_id", entity_id.c_str());
                 cJSON_AddStringToObject(body, "value", text.c_str());
                 char* body_str = cJSON_PrintUnformatted(body);
                 CallLocalHaService("text", "set_value", body_str);
@@ -1279,18 +1355,24 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
             std::vector<std::string> closed;   // 本次关闭的设备
             std::vector<std::string> skipped;  // 已经关闭的设备
 
+            auto& ha_sl = HaConfig::GetInstance();
+            std::string old_url   = ha_sl.ha_old_url();
+            std::string old_tok   = ha_sl.ha_old_token();
+            std::string new_url   = ha_sl.ha_new_url();
+            std::string new_tok   = ha_sl.ha_new_token();
+
             // ── 老HA：电视 / 水阀 / 气阀 / 总闸 ──────────────────────
-            struct SwitchDev { const char* name; const char* entity; };
+            struct SwitchDev { const char* name; std::string entity; };
             SwitchDev old_devs[] = {
-                {"电视",   ENTITY_TV},
-                {"水阀",   ENTITY_WATER_VALVE},
-                {"气阀",   ENTITY_GAS_VALVE},
-                {"总闸",   ENTITY_MAIN_SWITCH},
+                {"电视",   ha_sl.entity_tv()},
+                {"水阀",   ha_sl.entity_water_valve()},
+                {"气阀",   ha_sl.entity_gas_valve()},
+                {"总闸",   ha_sl.entity_main_switch()},
             };
             for (auto& d : old_devs) {
-                std::string s = GetEntityState(HA_OLD_URL, HA_OLD_TOKEN, d.entity);
+                std::string s = GetEntityState(old_url.c_str(), old_tok.c_str(), d.entity.c_str());
                 if (s == "on") {
-                    CallService(HA_OLD_URL, HA_OLD_TOKEN, "switch", "turn_off", d.entity);
+                    CallService(old_url.c_str(), old_tok.c_str(), "switch", "turn_off", d.entity.c_str());
                     closed.push_back(d.name);
                 } else if (s != "error" && s != "unknown") {
                     skipped.push_back(d.name);
@@ -1299,9 +1381,10 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
 
             // ── 新HA：智能插座 ────────────────────────────────────────
             {
-                std::string s = GetEntityState(HA_NEW_URL, HA_NEW_TOKEN, ENTITY_SMART_PLUG);
+                std::string plug = ha_sl.entity_smart_plug();
+                std::string s = GetEntityState(new_url.c_str(), new_tok.c_str(), plug.c_str());
                 if (s == "on") {
-                    CallService(HA_NEW_URL, HA_NEW_TOKEN, "switch", "turn_off", ENTITY_SMART_PLUG);
+                    CallService(new_url.c_str(), new_tok.c_str(), "switch", "turn_off", plug.c_str());
                     closed.push_back("智能插座");
                 } else if (s == "off") {
                     skipped.push_back("智能插座");
@@ -1309,17 +1392,17 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
             }
 
             // ── 新HA：窗帘1 / 窗帘2 ──────────────────────────────────
-            struct CoverDev { const char* name; const char* entity; };
+            struct CoverDev { const char* name; std::string entity; };
             CoverDev covers[] = {
-                {"窗帘1", ENTITY_CURTAIN_1},
-                {"窗帘2", ENTITY_CURTAIN_2},
+                {"窗帘1", ha_sl.entity_curtain_1()},
+                {"窗帘2", ha_sl.entity_curtain_2()},
             };
             for (auto& c : covers) {
                 // cover 状态：open / opening / closed / closing / stopped
-                std::string s = GetEntityState(HA_NEW_URL, HA_CAMERA_TOKEN, c.entity);
+                std::string s = GetEntityState(new_url.c_str(), new_tok.c_str(), c.entity.c_str());
                 if (s != "closed" && s != "closing" && s != "error" && s != "unknown") {
                     cJSON* body = cJSON_CreateObject();
-                    cJSON_AddStringToObject(body, "entity_id", c.entity);
+                    cJSON_AddStringToObject(body, "entity_id", c.entity.c_str());
                     char* bs = cJSON_PrintUnformatted(body);
                     CallLocalHaService("cover", "close_cover", bs);
                     free(bs);
@@ -1560,6 +1643,77 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
 
     ESP_LOGI(TAG, "Emergency Call Tool Registered.");
 
+    // ── 自定义设备工具（从 NVS ha_cfg::custom_devs 读取，重启后生效）──────────
+    {
+        auto custom_devs = HaConfig::GetInstance().GetCustomDevices();
+        for (const auto& dev : custom_devs) {
+            std::string tool_name = "control_" + dev.id;
+            std::string desc = "控制" + dev.name + "（实体：" + dev.entity + "）";
+            if (dev.domain == "cover")
+                desc += "。action: open(打开)/close(关闭)/stop(停止)/query(查询)";
+            else if (dev.domain == "climate")
+                desc += "。action: on(打开)/off(关闭)/query(查询)";
+            else if (dev.domain == "camera")
+                desc += "。这是摄像头设备（不支持云台转动）。"
+                        "查看画面: show_camera_on_screen(entity_id=\"" + dev.entity + "\")；"
+                        "分析画面: describe_ha_camera(entity_id=\"" + dev.entity + "\")。"
+                        "action仅支持: query(查询状态)。禁止调用 control_ha_camera。";
+            else if (dev.domain == "camera_ptz")
+                desc += "。这是支持云台转动的摄像头。"
+                        "查看画面: show_camera_on_screen(entity_id=\"" + dev.entity + "\")；"
+                        "分析画面: describe_ha_camera(entity_id=\"" + dev.entity + "\")；"
+                        "云台控制: control_ha_camera(entity_id=\"" + dev.entity + "\", direction=上/下/左/右)。"
+                        "action仅支持: query(查询状态)";
+            else
+                desc += "。action: on(打开)/off(关闭)/query(查询)";
+
+            server.AddTool(tool_name, desc,
+                PropertyList({
+                    Property("action", kPropertyTypeString),
+                }),
+                [dev](const PropertyList& props) -> ReturnValue {
+                    try {
+                        auto& ha = HaConfig::GetInstance();
+                        std::string url   = (dev.ha == "old") ? ha.ha_old_url()   : ha.ha_new_url();
+                        std::string token = (dev.ha == "old") ? ha.ha_old_token() : ha.ha_new_token();
+                        std::string action = props["action"].value<std::string>();
+
+                        if (action == "query") {
+                            std::string state = MyHomeDevice::GetInstance().GetEntityState(
+                                url.c_str(), token.c_str(), dev.entity.c_str());
+                            return dev.name + "当前状态：" + state;
+                        }
+
+                        if (dev.domain == "camera" || dev.domain == "camera_ptz") {
+                            return std::string("摄像头设备请用 show_camera_on_screen 或 describe_ha_camera，传入 entity_id=") + dev.entity;
+                        }
+
+                        std::string svc;
+                        if (dev.domain == "cover") {
+                            if      (action == "open"  || action == "on")  svc = "open_cover";
+                            else if (action == "close" || action == "off") svc = "close_cover";
+                            else if (action == "stop")                     svc = "stop_cover";
+                        } else {
+                            if      (action == "on")  svc = "turn_on";
+                            else if (action == "off") svc = "turn_off";
+                        }
+                        if (svc.empty()) return std::string("不支持的操作: ") + action;
+
+                        MyHomeDevice::GetInstance().CallService(
+                            url.c_str(), token.c_str(),
+                            dev.domain.c_str(), svc.c_str(), dev.entity.c_str());
+
+                        std::string act_cn = (action=="on"||action=="open") ? "打开" :
+                                             (action=="off"||action=="close") ? "关闭" : "停止";
+                        return "好的，已" + act_cn + dev.name;
+                    } catch (...) {
+                        return std::string("操作失败");
+                    }
+                });
+            ESP_LOGI(TAG, "Custom device tool registered: %s", tool_name.c_str());
+        }
+    }
+
     // 启动后台监控任务（跌倒检测和门磁监控暂时禁用）
     // StartFallDetectionMonitor();
     StartReminderTask();
@@ -1571,13 +1725,13 @@ void MyHomeDevice::RegisterHomeDeviceTools() {
 // ============================================================
 
 // 从 HA camera proxy 下载 JPEG（用 esp_http_client 避免 8KB 缓冲死锁）
-static bool DownloadJpegFromHA(std::string& jpeg_data, const char* url) {
+static bool DownloadJpegFromHA(std::string& jpeg_data, const char* url, const std::string& token) {
     jpeg_data.clear();
     esp_http_client_config_t cfg = {};
     cfg.url               = url;
     cfg.method            = HTTP_METHOD_GET;
     cfg.timeout_ms        = 12000;
-    cfg.buffer_size       = 8192;   // 加大接收缓冲，加速公网下载
+    cfg.buffer_size       = 8192;
     cfg.crt_bundle_attach = esp_crt_bundle_attach;
     cfg.event_handler = [](esp_http_client_event_t *evt) -> esp_err_t {
         if (evt->event_id == HTTP_EVENT_ON_DATA && evt->user_data)
@@ -1585,10 +1739,10 @@ static bool DownloadJpegFromHA(std::string& jpeg_data, const char* url) {
         return ESP_OK;
     };
     cfg.user_data = &jpeg_data;
-    cfg.buffer_size = 8192;
 
+    std::string dl_auth = "Bearer " + (token.empty() ? HaConfig::GetInstance().ha_camera_token() : token);
     auto client = esp_http_client_init(&cfg);
-    esp_http_client_set_header(client, "Authorization", "Bearer " HA_CAMERA_TOKEN);
+    esp_http_client_set_header(client, "Authorization", dl_auth.c_str());
     esp_err_t err = esp_http_client_perform(client);
     int status   = esp_http_client_get_status_code(client);
     esp_http_client_cleanup(client);

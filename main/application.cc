@@ -1,4 +1,5 @@
 #include "my_home_device.h"
+#include "config_server.h"
 #include "application.h"
 #include "board.h"
 #include "display.h"
@@ -406,12 +407,15 @@ void Application::Start() {
 
     // =========== 【修改开始】 ===========
     // 1. 注册 HA 控制工具 (你原来已经有的)
-    MyHomeDevice::GetInstance().RegisterHomeDeviceTools(); 
+    MyHomeDevice::GetInstance().RegisterHomeDeviceTools();
 
-    // 2. 启动老人久坐监控
-    // ESP_LOGI(TAG, "正在启动老人智能监控服务...");
+    // 2. 应用 NVS 中保存的工具启用/别名配置
+    mcp_server.ApplyConfig();
+
+    // 3. 启动局域网配置后台（WiFi 已就绪，可直接监听 80 端口）
+    ConfigServer::GetInstance().Start();
+
     // MyHomeDevice::GetInstance().StartElderlyMonitor();
-    // // 3. 启动门磁监控：检测到开门则上报 AI，可打断当前播报并提醒，通知完由服务器决定是否恢复未讲完的回答
     // MyHomeDevice::GetInstance().StartDoorMonitor();
     // =========== 【修改结束】 ===========
 

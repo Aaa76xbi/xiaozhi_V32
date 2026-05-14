@@ -593,11 +593,14 @@ endif()
 #                     )
 
 idf_component_register(SRCS ${SOURCES} "my_home_device.cc"
+                                       "ha_config.cc"
+                                       "mcp_config.cc"
+                                       "config_server.cc"
                     EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     # 👇 这一行改了：去掉 esp_crt_bundle，加上 mbedtls 和 esp_netif
-                    REQUIRES esp_http_client json esp_psram spi_flash app_update esp_app_format esp_partition efuse esp_timer esp_system nvs_flash esp_wifi driver esp_adc esp_websocket_client mbedtls esp_netif espressif__esp_new_jpeg
+                    REQUIRES esp_http_client esp_http_server json esp_psram spi_flash app_update esp_app_format esp_partition efuse esp_timer esp_system nvs_flash esp_wifi driver esp_adc esp_websocket_client mbedtls esp_netif espressif__esp_new_jpeg
                     )
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE

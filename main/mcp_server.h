@@ -12,6 +12,7 @@
 #include <mbedtls/base64.h>
 
 #include <cJSON.h>
+#include "mcp_config.h"
 
 class ImageContent {
 private:
@@ -334,6 +335,12 @@ public:
     void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);
 
+    // 从 McpConfig(NVS) 加载工具启用/别名配置，RegisterHomeDeviceTools 后调用
+    void ApplyConfig();
+
+    // 返回所有工具的 [{name, description}] JSON 数组（供 ConfigServer Web UI 使用）
+    std::string GetAllToolsInfoJson();
+
 private:
     McpServer();
     ~McpServer();
@@ -347,6 +354,10 @@ private:
     void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments);
 
     std::vector<McpTool*> tools_;
+
+    // 运行时覆盖（ApplyConfig 后填充）
+    std::map<std::string, ToolOverride> overrides_;
+    std::map<std::string, std::string>  alias_map_;   // 别名 → 原始名
 };
 
 #endif // MCP_SERVER_H
