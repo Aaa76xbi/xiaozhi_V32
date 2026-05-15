@@ -9,7 +9,21 @@
       "PowerShell(D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.10_env\\\\Scripts\\\\python.exe -m pip install packaging)",
       "PowerShell(D:\\\\espreseeif\\\\Espressif\\\\python_env\\\\idf5.5_py3.10_env\\\\Scripts\\\\python.exe -m pip install -r D:\\\\esp-idf-v55\\\\v5.5.2\\\\esp-idf\\\\tools\\\\requirements\\\\requirements.core.txt -c D:\\\\espreseeif\\\\Espressif\\\\espidf.constraints.v5.5.txt 2>&1)",
       "Bash(cd /d)",
-      "Bash(find \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\main\\\\boards\\\\yunxi-spacemans\" -type f)"
+      "Bash(find \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\main\\\\boards\\\\yunxi-spacemans\" -type f)",
+      "Bash(ffmpeg -i \"D:\\\\msedge_get\\\\Beaming Face with Smiling Eyes.png\" -vf \"scale=160:160:flags=lanczos,split[s0][s1];[s0]palettegen=max_colors=256:stats_mode=diff[p];[s1][p]paletteuse=dither=bayer:bayer_scale=5\" -loop 0 \"D:\\\\msedge_get\\\\happy.gif\" -y)",
+      "Bash(python3 -c ' *)",
+      "PowerShell(Get-Content \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\build\\\\CMakeCache.txt\" | Where-Object { $_ -match \"IDF_PATH\" } | Select-Object -First 5)",
+      "PowerShell(Get-Content \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\build\\\\CMakeCache.txt\" | Where-Object { $_ -match \"idf\" } | Select-Object -First 10)",
+      "PowerShell(Get-Command ninja -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Command cmake -ErrorAction SilentlyContinue)",
+      "PowerShell($env:PATH -split \";\")",
+      "PowerShell(Get-Content \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\build\\\\CMakeCache.txt\" | Where-Object { $_ -match \"^CMAKE_MAKE_PROGRAM|^CMAKE_COMMAND\" })",
+      "PowerShell(Get-Content \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\build\\\\CMakeCache.txt\" | Where-Object { $_ -match \"CXX_COMPILER|CC_COMPILER|CCACHE\" } | Select-Object -First 5)",
+      "PowerShell($env:IDF_PATH)",
+      "Bash(Get-ChildItem -Path \"D:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\main\\\\assets\" -Recurse -Force)",
+      "Bash(Select-Object FullName)",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"d:\\\\xiaozhi_AI\\\\xiaozhiAI4\\\\xiaozhi_V32\\\\main\\\\boards\\\\yunxi-spacemans\\\\emojis\")",
+      "Bash(awk '{print $9, $5}')"
     ]
   }
 }

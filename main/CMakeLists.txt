@@ -503,6 +503,7 @@ elseif(CONFIG_BOARD_TYPE_YUNXI_SPACEMANS)
     set(BOARD_TYPE "yunxi-spacemans")
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
     set(BUILTIN_ICON_FONT font_awesome_20_4)
+    set(DEFAULT_EMOJI_COLLECTION "${CMAKE_CURRENT_SOURCE_DIR}/boards/yunxi-spacemans/emojis")
 endif()
 
 file(GLOB BOARD_SOURCES

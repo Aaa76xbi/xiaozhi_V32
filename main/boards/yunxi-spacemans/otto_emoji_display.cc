@@ -5,10 +5,7 @@
 #include <cstring>
 
 #include "assets/lang_config.h"
-#include "display/lvgl_display/emoji_collection.h"
-#include "display/lvgl_display/lvgl_image.h"
 #include "display/lvgl_display/lvgl_theme.h"
-#include "otto_emoji_gif.h"
 
 #define TAG "OttoEmojiDisplay"
 OttoEmojiDisplay::OttoEmojiDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy)
@@ -24,11 +21,7 @@ void OttoEmojiDisplay::SetupPreviewImage() {
 }
 
 void OttoEmojiDisplay::InitializeOttoEmojis() {
-    ESP_LOGI(TAG, "初始化Otto GIF表情");
-    // TODO: Otto emoji GIF data not yet embedded.
-    // The otto-emoji-gif-component only provides GIF files in the gifs/ folder.
-    // Emoji display will be added once GIF data files are embedded.
-    ESP_LOGI(TAG, "Otto GIF表情初始化完成");
+    // GIF 表情由 assets 分区在启动后自动加载，此处无需操作
 }
 
 void OttoEmojiDisplay::SetupChatLabel() {

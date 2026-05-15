@@ -689,7 +689,14 @@ def get_emoji_collection_path(default_emoji_collection, xiaozhi_fonts_path):
     """
     if not default_emoji_collection:
         return None
-    
+
+    # Support absolute paths directly (for board-specific custom emoji folders)
+    if os.path.isabs(default_emoji_collection):
+        if os.path.exists(default_emoji_collection):
+            return default_emoji_collection
+        print(f"Warning: Emoji collection directory not found: {default_emoji_collection}")
+        return None
+
     emoji_path = os.path.join(xiaozhi_fonts_path, 'png', default_emoji_collection)
     if os.path.exists(emoji_path):
         return emoji_path
